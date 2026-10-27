@@ -44,3 +44,6 @@ mobile_app/.flutter-plugins-dependencies
 # 本机 Agent 技能脚手架（与产品无关）
 .agents/
 skills-lock.json
+
+# 本地下载的二进制工具（如 cloudflared.exe）不入库
+*.exe

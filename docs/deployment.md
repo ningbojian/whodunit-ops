@@ -240,7 +240,7 @@ python -m app.store.export --tenant local --out backups/local
 - Neon 免费版：约 1 GB 存储、100 CU-hours/月；无访问约 5 分钟后自动休眠，冷启动约 1–2 秒；没有 SLA。按单店几千场次、上万条预约估算，数据量远低于 1 GB。额度耗尽后写入可能失败；定期用 `python -m app.store.export` 导出备份。
 - 只能运行 **1 个 Uvicorn worker**。`InMemorySaver` 是进程内存储，多 worker 会导致同一用户的会话记忆分裂；数据库锁解决了业务数据并发写，但没有解决对话记忆。`Dockerfile` 已固定 `--workers 1`，不要在部署平台横向扩实例。
 - **对话记忆不持久**：Neon 只存场次、预约、剧本、审批与用量；重启进程后同一 `thread_id` 的聊天历史仍是空的。需要持久对话记忆需另接 checkpointer，本期不做。
-- 容器以非 root 的 `user` 用户（UID 1000）运行，`$PORT` 由平台注入（缺省 8000）；`/healthz` 会检查数据库连通性、核心表是否存在以及生产环境的模型 key，任一不满足返回 503，不会静默回退 Excel。
+- 容器以非 root 的 `user` 用户（UID 1000）运行，`$PORT` 由平台注入（缺省 8000）。**探针用 `/livez`，它不碰数据库**；`/healthz` 才是依赖检查，会看数据库连通性、核心表是否存在以及生产环境的模型 key，任一不满足返回 503，不会静默回退 Excel。把探针挂在 `/healthz` 上会让 Neon 永不休眠，免费额度的计算时长几天内被烧光。
 
 ## 本轮不做
 

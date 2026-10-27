@@ -36,7 +36,8 @@ EXPOSE 8000
 # 原样写进平台日志；应用层只记录申请编号和异常类型。
 CMD ["sh", "-c", "exec uvicorn app.web.main:create_app --factory --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --forwarded-allow-ips='*' --no-access-log"]
 
-# /healthz 会真的连一次数据库（ping + 表存在性各占一个连接）。库在境外时
-# 一次检查要 3–4 秒，3 秒的内层超时会让容器一直显示 unhealthy，所以留足余量。
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD ["sh", "-c", "python -c \"import os, sys, urllib.request; port = os.environ.get('PORT', '8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=8).status == 200 else 1)\""]
+# 探针用 /livez：它只证明进程还在，不碰数据库。拿 /healthz 当探针会让每次
+# 检查都真连一次库，Neon 免费版因此永远不会挂起，计算时长几天就被烧光。
+# 依赖状态（库、schema、模型 key）仍由 /healthz 反映，供人工和负载均衡使用。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["sh", "-c", "python -c \"import os, sys, urllib.request; port = os.environ.get('PORT', '8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/livez', timeout=4).status == 200 else 1)\""]

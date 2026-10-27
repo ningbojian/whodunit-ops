@@ -249,6 +249,25 @@ def test_healthz_degrades_when_database_closes(tmp_path):
     assert response.json()["ok"] is False
 
 
+def test_livez_stays_ok_when_database_closes(tmp_path):
+    """存活探针只反映进程状态，不能依赖数据库。
+
+    容器 HEALTHCHECK 挂在 /livez 上就是为了让探针不碰库；一旦这里开始查库，
+    Neon 免费版会永远不休眠，计算额度几天内耗尽。
+    """
+    clock = MutableClock()
+    app = build_app(tmp_path, clock, RecordingEmailSender())
+
+    with TestClient(app) as client:
+        app.state.access_store.close()
+        app.state.usage.close()
+        response = client.get("/livez")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.headers["Cache-Control"] == "no-store"
+
+
 # ---------------------------------------------------------------------------
 # 暗色运营台：新页面、移动兜底与本地静态资源
 # ---------------------------------------------------------------------------

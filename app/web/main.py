@@ -507,6 +507,18 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
+    @app.get("/livez")
+    def livez(request: Request):
+        """进程存活检查：不碰数据库。
+
+        容器的 HEALTHCHECK 用这个。如果拿 /healthz 当探针，每次探测都会真的
+        连一次库，Neon 免费版因此永远不会挂起，计算时长几天就会被烧光。
+        """
+        return JSONResponse(
+            {"ok": True},
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.get("/healthz")
     def healthz(request: Request):
         db_ok = usage.ping() and access_store.ping()
