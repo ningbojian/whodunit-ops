@@ -6,6 +6,9 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      # 大陆机器直连 pypi.org 经常慢到超时；在 .env 里设 PIP_INDEX_URL 换源即可。
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     restart: unless-stopped
     env_file:
       - .env

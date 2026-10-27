@@ -17,7 +17,11 @@ WORKDIR /home/user/app
 RUN mkdir -p /home/user/app/data && chown -R user:user /home/user
 
 COPY --chown=user:user requirements.txt ./
-RUN python -m pip install --no-cache-dir -r requirements.txt
+# 大陆机器直连 pypi.org 经常慢到超时，构建时可以换源：
+#   PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple docker compose build
+# 默认仍是官方源，境外构建不受影响。
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN python -m pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" -r requirements.txt
 
 COPY --chown=user:user app ./app
 

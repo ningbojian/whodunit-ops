@@ -60,6 +60,9 @@ def test_dockerfile_runs_single_non_root_worker():
     assert "/healthz" in text
     assert "app.web.main:create_app" in text
     assert "HEALTHCHECK" in text
+    # 大陆机器直连 pypi.org 会慢到超时，构建时必须能换源。
+    assert "ARG PIP_INDEX_URL" in text
+    assert '--index-url "${PIP_INDEX_URL}"' in text
     # 健康检查也必须跟随平台注入的端口，不能写死 8000。
     healthcheck = text.split("HEALTHCHECK", 1)[1]
     assert "PORT" in healthcheck
@@ -309,6 +312,7 @@ def test_vps_compose_only_exposes_caddy():
     assert "expose:" in web_block and '"8000"' in web_block
     assert "ports:" not in web_block
     assert "SITE_ADDRESS" in text
+    assert "PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}" in text
 
 
 def test_vps_caddyfile_keeps_access_logs_off():
@@ -336,6 +340,7 @@ def test_cloudflare_tunnel_compose_publishes_no_ports():
     assert "--protocol http2" in body
     # TLS 由 Cloudflare 边缘终结，不需要 Caddy。
     assert "caddy" not in body.lower()
+    assert "PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}" in body
 
 
 def test_cloudflare_tunnel_readme_documents_origin():
