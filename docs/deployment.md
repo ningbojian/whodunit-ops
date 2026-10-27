@@ -64,6 +64,7 @@ cd whodunit-ops && git pull && cd deploy/cloudflare && docker compose up -d --bu
 - Cloudflare 免费版**不经中国大陆节点**，延迟约等于香港边缘；首访还要叠加 Neon 冷启动 1–2 秒。
 - 容器磁盘是临时的，业务数据在 Neon；重新部署只丢进程内的对话记忆。
 - **本地管理生成的凭据不能入库。** `cloudflared tunnel login` 写出 `cert.pem`（账户级 API 证书），`create` 写出 `<UUID>.json`（隧道密钥）；`.gitignore` 已把 `deploy/cloudflare/cloudflared/` 整体排除，只放行 `config.yml.example`。
+- **凭据属主要改成 65532。** 准备凭据的一次性容器用 `--user root` 运行，写出的文件是 `root:root 0600`；运行时容器以 nonroot（uid 65532）启动，读不到就会刷 `permission denied`。`chown 65532:65532` 之后保持 `0600` 即可。
 
 ## 备选：香港轻量 + Caddy
 

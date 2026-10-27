@@ -59,6 +59,15 @@ $CFRUN tunnel route dns whodunit-ops demo.ghtrending.cyou
 这一步会在 `cloudflared/` 里留下两个凭据文件：`cert.pem`（账户级 API 证书）和
 `<UUID>.json`（隧道密钥）。两者都不能入库，`.gitignore` 已把该目录整体排除、只放行模板。
 
+**这两次 `docker run` 用了 `--user root`，所以文件属主是 root；而运行时容器以 nonroot
+（uid 65532）启动，会把 `0600 root` 的文件判成 `permission denied`。** 必须改属主：
+
+```bash
+chown 65532:65532 cloudflared/*.json cloudflared/config.yml
+chmod 600 cloudflared/*.json cloudflared/config.yml
+ls -ln cloudflared/          # 第三、四列应是 65532 65532
+```
+
 ```bash
 cp ../vps/.env .                       # 或直接新建；同级的 .env 里不要再写 TUNNEL_TOKEN
 cp cloudflared/config.yml.example cloudflared/config.yml
