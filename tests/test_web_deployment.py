@@ -70,6 +70,10 @@ def test_dockerfile_runs_single_non_root_worker():
     # 健康检查也必须跟随平台注入的端口，不能写死 8000。
     healthcheck = text.split("HEALTHCHECK", 1)[1]
     assert "PORT" in healthcheck
+    # /healthz 会真连一次数据库；库在境外时单次要 3–4 秒，
+    # 内层超时退回 3 秒会让容器永远 unhealthy。
+    assert "timeout=8" in healthcheck
+    assert "--timeout=10s" in healthcheck
 
 
 def test_dockerignore_excludes_secrets_and_runtime_data():
