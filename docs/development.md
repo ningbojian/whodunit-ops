@@ -36,7 +36,7 @@ Dockerfile / render.yaml   网页版容器与 Render 配置
 
 ## 测试约定
 
-- **全量离线**：`python -m pytest -q` 不需要 API key、不联网、不写真实 `data/`。目前 1559 个通过，另有 2 个可选 Postgres 契约测试默认跳过（设 `TEST_DATABASE_URL` 才跑）。
+- **全量离线**：`python -m pytest -q` 不需要 API key、不联网、不写真实 `data/`。目前 1561 个通过，另有 2 个可选 Postgres 契约测试默认跳过（设 `TEST_DATABASE_URL` 才跑）。
 - **LLM 必须可注入**：`tests/test_extract.py` 通过 autouse fixture 阻止任何测试意外初始化真实模型；工具 1 / 7 的模型调用默认注入 FakeLLM。
 - **网络必须 mock**：`tests/test_web_search.py` 全部 mock，不产生真实调用。
 - **npm 包装**：`npm run build` = `compileall` + 全量 pytest，会自动寻找真实 Python 解释器，避开 Windows 应用商店的占位程序。`npm run migrate -- --init` 会建表，`--` 之后的参数原样转发给 `app.store.migrate`（`--force` / `--source` / `--tenant` 等）。
