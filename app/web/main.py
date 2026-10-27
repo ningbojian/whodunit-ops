@@ -28,8 +28,7 @@ from app.store.engine import (
     create_database_engine,
     dispose_engine,
     ensure_schema,
-    ping_engine,
-    schema_ready,
+    probe_database,
 )
 from app.store.workspace import DatabaseWorkspaceManager
 from app.tools.dm_control import DMControlError
@@ -521,11 +520,15 @@ def create_app(
 
     @app.get("/healthz")
     def healthz(request: Request):
-        db_ok = usage.ping() and access_store.ping()
-        schema_ok = True
+        # 数据库模式下只用一次取连接、一条 SQL 就拿到「连得上」和「表存在」。
+        # 原先走四次独立 connect()，每次还要付 pre-ping 和 ROLLBACK，跨境部署
+        # 会放大成十几倍往返（实测 0.82s，合并后约 0.1s）。
         if engine is not None:
-            db_ok = db_ok and ping_engine(engine)
-            schema_ok = schema_ready(engine)
+            db_ok, schema_ok = probe_database(engine)
+        else:
+            # Excel 兼容模式没有引擎，只能问各自的存储。
+            db_ok = usage.ping() and access_store.ping()
+            schema_ok = True
         model_ok = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
         # 模型 key 只约束生产：离线测试与本地演示不需要它。
         healthy = db_ok and schema_ok and (model_ok or not config.is_production)

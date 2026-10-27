@@ -67,6 +67,76 @@ def test_database_chat_and_snapshot_without_excel(tmp_path):
     assert not list((tmp_path / "web_users").rglob("*.xlsx"))
 
 
+def test_healthz_uses_a_single_database_round_trip(tmp_path):
+    """健康检查不能把同一个引擎连续 ping 四遍。
+
+    跨境部署时每条 SQL 都是一次 55ms 量级的往返，而且每次 ``engine.connect()``
+    还要多付 pre-ping 和归还时的 ROLLBACK。原先 /healthz 在同一引擎上做了
+    usage/access/ping/schema 四次探测，实测耗时 0.82 秒。合并成一条查询后
+    只应剩 pre-ping 和这条查询本身。
+    """
+    from sqlalchemy import event
+
+    clock = MutableClock()
+    app, _ = build_database_app(tmp_path, clock, [])
+    engine = app.state.engine
+
+    statements: list[str] = []
+    event.listen(
+        engine, "before_cursor_execute", lambda *args: statements.append(args[2])
+    )
+
+    with TestClient(app) as client:
+        statements.clear()
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["db"] is True
+    assert body["schema"] is True
+    # pre-ping 一条 + 真正的 schema 查询一条。超过两条就说明又在重复探测。
+    assert len(statements) <= 2, statements
+
+
+def test_runs_page_loads_each_table_once(tmp_path):
+    """场控看板不能对每条 run 重读整张表。
+
+    ``run_view`` 原先对每条 run 调 ``load_sessions_with_counts`` 和
+    ``load_rooms``，一天 N 场就多出 4N 次串行查询；跨境部署每条 55ms。
+    上游 ``list_runs_today`` 现在传入共享的 ``RunLookups``，每张表只读一次。
+    """
+    from sqlalchemy import event
+
+    clock = MutableClock()
+    app, _ = build_database_app(tmp_path, clock, [])
+
+    statements: list[str] = []
+    event.listen(
+        app.state.engine,
+        "before_cursor_execute",
+        lambda *args: statements.append(args[2]),
+    )
+
+    def count(query_target: str) -> int:
+        return sum(
+            1
+            for sql in statements
+            if query_target in sql and sql.lstrip().upper().startswith("SELECT")
+        )
+
+    with TestClient(app) as client:
+        fully_authorize(client, app.state.mailer)
+        client.get("/runs")  # 首访会灌演示数据，不计入
+        statements.clear()
+        assert client.get("/runs").status_code == 200
+
+    # 每张表最多读一次；超过就说明 N+1 回来了。
+    assert count("FROM sessions") <= 1, statements
+    assert count("FROM rooms") <= 1, statements
+    assert count("FROM session_assignments") <= 1, statements
+    assert count("FROM scripts") <= 1, statements
+
+
 def test_two_emails_are_isolated_in_database_mode(tmp_path):
     clock = MutableClock()
     app, _ = build_database_app(

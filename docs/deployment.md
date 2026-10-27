@@ -61,7 +61,9 @@ cd whodunit-ops && git pull && cd deploy/cloudflare && docker compose up -d --bu
 
 - **`--protocol http2` 是默认值。** 大陆网络对 QUIC（UDP 7844）经常不稳，表现为隧道反复重连；网络确认稳定后可删掉该参数换回 QUIC。
 - 客户端 IP 由 Cloudflare 通过 `X-Forwarded-For` 传入，配合 `Dockerfile` 的 `--proxy-headers --forwarded-allow-ips='*'`，按 IP 的限流仍然有效。端口不发布，因此这条设置不会被外部伪造。
-- Cloudflare 免费版**不经中国大陆节点**，延迟约等于香港边缘；首访还要叠加 Neon 冷启动 1–2 秒。
+- Cloudflare 免费版**没有中国大陆节点**。实测：从大陆 ECS 和国内家宽访问 `demo.ghtrending.cyou`，Cloudflare 都返回 `cf-ray` 的 `MAN`（曼彻斯特）或 `LAX`（洛杉矶）节点，不经过香港。一次静态文件请求（`/static/app.css`，不碰数据库）首字节就要 2.2 秒，因为请求被两次跨洋：浏览器 → 欧美边缘 → 穿回大陆 ECS。这是免费版 anycast 选路的物理成本，**改配置和改代码都消不掉**。容器内部同一个静态文件只要 3 毫秒，所以应用本身是快的。
+- **需要低延迟时，正解是换到香港或境外的轻量服务器直连**（见下方「备选：香港轻量 + Caddy」），不要继续在隧道上做优化。要留在这台大陆 ECS 上，就只能接受 2.5 秒起步的静态资源延迟——应用侧能做的只是不再额外叠加数据库往返（见下一条）。
+- **跨境部署要控制每个请求的数据库往返次数。** 实测从这台 ECS 到 Neon 新加坡：DNS 约 120ms、TCP 建连 55ms、热连接上一次查询 55ms、新建连接含握手约 240ms。所以「多查一条 SQL」就是多 55ms，「多建一次连接」就是多 240ms。`/healthz` 原先在同一个引擎上做四次独立探测（还叠加 `pool_pre_ping` 和归还时的 `ROLLBACK`），实测 0.82 秒；已合并为一次取连接、一条 SQL，约 0.1 秒。新增健康检查或页面查询时请沿用这个口径。
 - 容器磁盘是临时的，业务数据在 Neon；重新部署只丢进程内的对话记忆。
 - **本地管理生成的凭据不能入库。** `cloudflared tunnel login` 写出 `cert.pem`（账户级 API 证书），`create` 写出 `<UUID>.json`（隧道密钥）；`.gitignore` 已把 `deploy/cloudflare/cloudflared/` 整体排除，只放行 `config.yml.example`。
 - **凭据属主要改成 65532。** 准备凭据的一次性容器用 `--user root` 运行，写出的文件是 `root:root 0600`；运行时容器以 nonroot（uid 65532）启动，读不到就会刷 `permission denied`。`chown 65532:65532` 之后保持 `0600` 即可。
@@ -237,7 +239,8 @@ python -m app.store.export --tenant local --out backups/local
 ## 免费层与单 worker 限制
 
 - 免费托管平台的**磁盘普遍是临时的**，且会休眠；数据库模式下业务数据、审批记录与每日用量都在 Neon，**重启实例不会丢**。Excel 兼容模式（`WEB_STORAGE_BACKEND=excel`）依赖本地磁盘，重启会重置工作区与审批记录，因此**生产环境已在启动校验中禁止该模式**。
-- Neon 免费版：约 1 GB 存储、100 CU-hours/月；无访问约 5 分钟后自动休眠，冷启动约 1–2 秒；没有 SLA。按单店几千场次、上万条预约估算，数据量远低于 1 GB。额度耗尽后写入可能失败；定期用 `python -m app.store.export` 导出备份。
+- Neon 免费版：约 1 GB 存储、100 CU-hours/月；无访问约 5 分钟后自动休眠，冷启动约 1–2 秒；没有 SLA。按单店几千场次、上万条预约估算，数据量远低于 1 GB。额度耗尽后写入可能失败；定期用 `python -m app.store.export` 导出备份。跨境访问时，**休眠唤醒的那一次**会在 TCP 建连完成后多等 1–2 秒，这是免费版的必然代价；不要为了消掉它而让探针去打数据库，那会 24 小时烧光计算额度。
+- 连接池 `pool_recycle` 设为 1800 秒而不是 300 秒：每次重建物理连接都要重新付一遍 DNS 解析、TCP 和 TLS 握手（跨境合计约 240ms）。Neon 挂起导致的坏连接由 `pool_pre_ping` 兜住，不需要靠频繁回收来规避。
 - 只能运行 **1 个 Uvicorn worker**。`InMemorySaver` 是进程内存储，多 worker 会导致同一用户的会话记忆分裂；数据库锁解决了业务数据并发写，但没有解决对话记忆。`Dockerfile` 已固定 `--workers 1`，不要在部署平台横向扩实例。
 - **对话记忆不持久**：Neon 只存场次、预约、剧本、审批与用量；重启进程后同一 `thread_id` 的聊天历史仍是空的。需要持久对话记忆需另接 checkpointer，本期不做。
 - 容器以非 root 的 `user` 用户（UID 1000）运行，`$PORT` 由平台注入（缺省 8000）。**探针用 `/livez`，它不碰数据库**；`/healthz` 才是依赖检查，会看数据库连通性、核心表是否存在以及生产环境的模型 key，任一不满足返回 503，不会静默回退 Excel。把探针挂在 `/healthz` 上会让 Neon 永不休眠，免费额度的计算时长几天内被烧光。

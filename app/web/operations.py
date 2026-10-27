@@ -903,13 +903,17 @@ class OperationsService:
         listed = list_schedule(
             store, start_from=start, start_to=end, now=self.business_now()
         )
+        # 房间和 DM 各查一次，后面组装名称映射和返回体都复用同一份，
+        # 不再像原先那样在同一个请求里各读两遍（跨境部署每条查询 55ms）。
+        rooms_frame = load_rooms(store=store)
+        dms_frame = load_dms(store=store)
         rooms = {
             _text(row.get("room_id")): _text(row.get("name"))
-            for row in load_rooms(store=store).to_dict("records")
+            for row in rooms_frame.to_dict("records")
         }
         dms = {
             _text(row.get("dm_id")): _text(row.get("name"))
-            for row in load_dms(store=store).to_dict("records")
+            for row in dms_frame.to_dict("records")
         }
         # 时长映射：看板（web 时间轴 / Flutter 时间轴）需要知道每场占多久。
         # 用剧本名精确匹配，缺失或非法时退回全局默认 240 分钟。
@@ -962,7 +966,7 @@ class OperationsService:
                 )
         history = dm_script_history(store=store)
         dm_rows = []
-        for row in load_dms(store=store).to_dict("records"):
+        for row in dms_frame.to_dict("records"):
             item = dms_to_dict(row)
             dm_id = _text(item.get("dm_id"))
             bucket = history.get(dm_id) or {}
@@ -974,7 +978,7 @@ class OperationsService:
         return {
             "sessions": listed["sessions"],
             "scripts": script_rows,
-            "rooms": [rooms_to_dict(row) for row in load_rooms(store=store).to_dict("records")],
+            "rooms": [rooms_to_dict(row) for row in rooms_frame.to_dict("records")],
             "dms": dm_rows,
             "as_of": listed["as_of"],
             "window": {

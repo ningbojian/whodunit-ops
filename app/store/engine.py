@@ -80,7 +80,10 @@ def create_database_engine(
             max_overflow=max(0, int(max_overflow)),
             pool_timeout=float(pool_timeout),
             pool_pre_ping=True,
-            pool_recycle=300,
+            # 300 秒会把「还活着并且正在用」的连接也主动作废，下次再付一次
+            # 跨洋握手（DNS 120ms + TCP 55ms + TLS）。Neon 挂起导致的坏连接
+            # 由 pool_pre_ping 兜住，所以这里可以放宽到 30 分钟。
+            pool_recycle=1800,
             # Neon 的 DATABASE_URL 是 PgBouncer 事务模式（-pooler）。
             # psycopg 3 默认在重复执行 5 次后使用服务端 prepared statement，
             # 事务模式会在下一次事务换后端时报 "prepared statement already exists"。
@@ -158,6 +161,44 @@ def schema_ready(engine: Engine | None) -> bool:
         return False
 
 
+def probe_database(engine: Engine | None) -> tuple[bool, bool]:
+    """一次取连接、一条查询，同时判断连通性与核心表是否就绪。
+
+    健康检查原先在同一个引擎上做了四次独立的 ``connect()``（usage、access、
+    ping、schema），每次 checkout 还要多付 ``pool_pre_ping`` 和归还时的
+    ROLLBACK。跨境部署下每次往返都是 55ms 量级，四次探测会放大成十几倍。
+    这条 SQL 本身失败就说明连不上，成功就说明连得上——不需要再单独 ping。
+
+    返回 ``(db_ok, schema_ok)``；连不上时两者均为 False。
+    """
+    if engine is None:
+        return False, False
+    try:
+        # AUTOCOMMIT：只读探测不进事务，连接归还池时就不会再发一次 ROLLBACK。
+        with engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            if engine.dialect.name == "postgresql":
+                ready = conn.execute(
+                    text(
+                        "SELECT to_regclass('public.tenants') IS NOT NULL "
+                        "AND to_regclass('public.access_requests') IS NOT NULL"
+                    )
+                ).scalar()
+                return True, bool(ready)
+            rows = conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name IN ('tenants', 'access_requests')"
+                )
+            ).fetchall()
+            return True, len(rows) == len(_REQUIRED_TABLES)
+    except SQLAlchemyError:
+        return False, False
+    except Exception:  # noqa: BLE001 - 健康检查不能向上抛
+        return False, False
+
+
 def dispose_engine(engine: Engine | None) -> None:
     if engine is None:
         return
@@ -174,6 +215,7 @@ __all__ = [
     "ensure_schema",
     "normalize_database_url",
     "ping_engine",
+    "probe_database",
     "redact_database_url",
     "schema_ready",
     "sqlite_url",

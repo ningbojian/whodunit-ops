@@ -421,16 +421,65 @@ def _clamp_at(run: dict[str, Any], value: Any, now: pd.Timestamp) -> tuple[pd.Ti
 # ---------------------------------------------------------------------------
 
 
-def _session_row(store: Any, session_id: str) -> dict[str, Any] | None:
-    frame = load_sessions_with_counts(store=store)
+class RunLookups:
+    """一次请求内复用的只读数据帧。
+
+    ``run_view`` 原先对每一条场控都重新加载 sessions/bookings、assignments、
+    rooms、scripts、script_stages。跨境部署下一条查询是 55ms 量级，一天 8 场
+    场控就会叠出三十多次串行往返。传入同一个实例后，每张表只读一次；
+    帧在第一次用到时才加载，写入路径不传它，行为保持不变。
+    """
+
+    def __init__(self, store: Any, *, sessions: Any = None) -> None:
+        self.store = store
+        self._sessions = sessions
+        self._assignments = None
+        self._rooms = None
+        self._scripts = None
+        self._stages = None
+
+    def sessions(self) -> pd.DataFrame:
+        if self._sessions is None:
+            self._sessions = load_sessions_with_counts(store=self.store)
+        return self._sessions
+
+    def assignments(self) -> pd.DataFrame:
+        if self._assignments is None:
+            self._assignments = load_assignments(store=self.store)
+        return self._assignments
+
+    def rooms(self) -> pd.DataFrame:
+        if self._rooms is None:
+            self._rooms = load_rooms(store=self.store)
+        return self._rooms
+
+    def scripts(self) -> pd.DataFrame:
+        if self._scripts is None:
+            self._scripts = load_scripts(store=self.store)
+        return self._scripts
+
+    def stages(self) -> pd.DataFrame:
+        if self._stages is None:
+            self._stages = coerce_frame(
+                self.store.load_script_stages(), SCRIPT_STAGES_SPEC
+            )
+        return self._stages
+
+
+def _session_row(
+    store: Any, session_id: str, *, frame: Any = None
+) -> dict[str, Any] | None:
+    frame = load_sessions_with_counts(store=store) if frame is None else frame
     if frame.empty:
         return None
     hit = frame[frame["session_id"].astype("string").fillna("") == _text(session_id)]
     return hit.iloc[0].to_dict() if not hit.empty else None
 
 
-def _script_for_session(store: Any, session: dict[str, Any]) -> dict[str, Any] | None:
-    scripts = load_scripts(store=store)
+def _script_for_session(
+    store: Any, session: dict[str, Any], *, scripts: Any = None
+) -> dict[str, Any] | None:
+    scripts = load_scripts(store=store) if scripts is None else scripts
     if scripts.empty:
         return None
     key = normalize_script_name(session.get("script_name")).casefold()
@@ -448,8 +497,14 @@ def _script_for_session(store: Any, session: dict[str, Any]) -> dict[str, Any] |
     return None
 
 
-def _template_rows(store: Any, script_id: str) -> tuple[pd.DataFrame, int]:
-    frame = coerce_frame(store.load_script_stages(), SCRIPT_STAGES_SPEC)
+def _template_rows(
+    store: Any, script_id: str, *, stages: Any = None
+) -> tuple[pd.DataFrame, int]:
+    frame = (
+        coerce_frame(store.load_script_stages(), SCRIPT_STAGES_SPEC)
+        if stages is None
+        else stages
+    )
     if frame.empty:
         return frame, 0
     hit = frame[
@@ -462,12 +517,18 @@ def _template_rows(store: Any, script_id: str) -> tuple[pd.DataFrame, int]:
     return hit, version
 
 
-def _template_snapshot(store: Any, session: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    script = _script_for_session(store, session)
+def _template_snapshot(
+    store: Any, session: dict[str, Any], *, lookups: "RunLookups | None" = None
+) -> tuple[dict[str, Any], int]:
+    script = _script_for_session(
+        store, session, scripts=None if lookups is None else lookups.scripts()
+    )
     if script is None:
         raise DMControlError("template_missing", "场次对应的剧本不在剧本库中。")
     script_id = _text(script.get("script_id"))
-    rows, version = _template_rows(store, script_id)
+    rows, version = _template_rows(
+        store, script_id, stages=None if lookups is None else lookups.stages()
+    )
     if rows.empty:
         raise DMControlError("template_missing", "该剧本还没有启用的阶段模板。")
     snapshot = snapshot_for_run(rows, version=version)
@@ -498,8 +559,12 @@ def _stage_at(snapshot: dict[str, Any], seq: int | None) -> dict[str, Any] | Non
     return None
 
 
-def _room_assignment(store: Any, session_id: str) -> tuple[str | None, str | None]:
-    assignments = load_assignments(store=store)
+def _room_assignment(
+    store: Any, session_id: str, *, lookups: "RunLookups | None" = None
+) -> tuple[str | None, str | None]:
+    assignments = (
+        load_assignments(store=store) if lookups is None else lookups.assignments()
+    )
     if assignments.empty:
         return None, None
     hit = assignments[
@@ -509,7 +574,7 @@ def _room_assignment(store: Any, session_id: str) -> tuple[str | None, str | Non
     if hit.empty:
         return None, None
     room_id = _text(hit.iloc[0].get("resource_id")) or None
-    rooms = load_rooms(store=store)
+    rooms = load_rooms(store=store) if lookups is None else lookups.rooms()
     room_name = None
     if room_id and not rooms.empty:
         room = rooms[rooms["room_id"].astype("string").fillna("") == room_id]
@@ -553,9 +618,14 @@ def run_view(
     *,
     for_dm: bool = True,
     now: Any = None,
+    lookups: "RunLookups | None" = None,
 ) -> dict[str, Any]:
     moment = _utc_now(now)
-    session = _session_row(store, _text(run.get("session_id")))
+    session = _session_row(
+        store,
+        _text(run.get("session_id")),
+        frame=None if lookups is None else lookups.sessions(),
+    )
     warnings: list[str] = []
     status = _text(run.get("status")) or "pending"
     preview = status == "pending"
@@ -563,7 +633,9 @@ def run_view(
     if preview or not snapshot.get("stages"):
         if session is not None:
             try:
-                current_snapshot, _ = _template_snapshot(store, session)
+                current_snapshot, _ = _template_snapshot(
+                    store, session, lookups=lookups
+                )
                 if not snapshot.get("stages"):
                     snapshot = current_snapshot
             except DMControlError:
@@ -625,7 +697,9 @@ def run_view(
             "total_seats": _int(session.get("total_seats")) or None,
         }
 
-    current_room, current_room_name = _room_assignment(store, _text(run.get("session_id")))
+    current_room, current_room_name = _room_assignment(
+        store, _text(run.get("session_id")), lookups=lookups
+    )
     if run.get("room_id") and current_room and _text(run.get("room_id")) != current_room:
         warnings.append(
             f"排期已换到 {current_room_name or current_room}，本场控仍按开场时快照显示。"
@@ -1768,6 +1842,9 @@ def list_runs_today(
     runs = _load_runs(store)
     if runs.empty:
         return []
+    # 同一次请求内所有场控共用一组数据帧：sessions/bookings 已经在上方读过，
+    # assignments、rooms、scripts、script_stages 也各只读一次。
+    lookups = RunLookups(store, sessions=sessions)
     items: list[dict[str, Any]] = []
     for row in runs.to_dict("records"):
         status = _text(row.get("status"))
@@ -1775,7 +1852,7 @@ def list_runs_today(
         same_day = session_start is not None and session_start.date() == target
         if status not in OPEN_STATUSES and not same_day:
             continue
-        view = run_view(store, row, for_dm=False, now=moment)
+        view = run_view(store, row, for_dm=False, now=moment, lookups=lookups)
         items.append(
             {
                 "run": view["run"],
