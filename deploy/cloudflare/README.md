@@ -7,9 +7,22 @@ Cloudflare 边缘建立出站隧道，公网请求经 Cloudflare 转发进来。
 > 这是技术上的可行路径，不是合规上的豁免：隧道不改变「大陆服务器对外提供 Web 服务」这一事实。
 > 需要完全合规时，正解是完成 ICP 备案或改用香港 / 境外机器（见 `deploy/vps/`）。
 
-## Cloudflare 侧的状态（不在仓库里，必须手工维护）
+## 两种管理模式
 
-以下配置存在于 Cloudflare 控制台，**重建隧道后需要重新配置**，所以记录在这里。
+隧道有两种配置方式，二选一：
+
+| | 远程管理（默认） | 本地管理 |
+|---|---|---|
+| 配置放在哪 | Cloudflare 控制台 | 仓库里 `cloudflared/config.yml` |
+| 需要 Zero Trust 组织 | **需要** | 不需要 |
+| 创建时要求绑支付方式 | 是（免费版不扣费，但没有可用的卡就过不去） | **否** |
+| 用哪个 compose | `docker-compose.yml` | `docker-compose.local.yml` |
+
+如果创建 Zero Trust 组织时被卡在「绑定支付方式」，走本地管理。
+
+### 远程管理（控制台）
+
+以下配置存在于 Cloudflare 控制台，**重建隧道后需要重新配置**。
 
 | 项 | 值 |
 |---|---|
@@ -18,15 +31,43 @@ Cloudflare 边缘建立出站隧道，公网请求经 Cloudflare 转发进来。
 | Public Hostname | `demo.ghtrending.cyou` |
 | 源站 | `http://web:8000` |
 
-源站写 `web:8000` 而不是 `127.0.0.1:8000`：`cloudflared` 和 `web` 在同一个 compose 网络里，
-`web` 是服务名，由 Docker 内置 DNS 解析。宿主机上没有任何进程监听 8000。
-
-## 本机侧
-
-1. `cp ../vps/.env .`，补一行 `TUNNEL_TOKEN`（在 Zero Trust → Networks → Tunnels 里复制）。
+1. `cp ../vps/.env .`，补一行 `TUNNEL_TOKEN`（Zero Trust → Networks → Tunnels 里复制）。
 2. `docker compose up -d --build`。
 3. `docker compose logs cloudflared` 应看到 4 条 `Registered tunnel connection`。
-4. `curl https://demo.ghtrending.cyou/healthz`，`db`、`schema`、`model` 三项都应为 `true`。
+
+### 本地管理（命令行，不经过控制台）
+
+**前提：域名的 NS 已经切到 Cloudflare，且控制台显示 Active**，否则 `route dns` 建不了记录。
+
+在**有浏览器的电脑**上做（登录流程要开浏览器，ECS 上没有）：
+
+```bash
+cloudflared tunnel login                    # 浏览器里选 ghtrending.cyou 授权
+cloudflared tunnel create whodunit-ops      # 记下输出的 UUID
+cloudflared tunnel route dns whodunit-ops demo.ghtrending.cyou
+```
+
+生成的 `<UUID>.json` 在 `~/.cloudflared/`（Windows 是 `C:\Users\<你>\.cloudflared\`）。
+
+回到 ECS：
+
+```bash
+mkdir -p deploy/cloudflare/cloudflared
+# 把 <UUID>.json 传进来：阿里云 Workbench 的文件上传，或 scp
+cp deploy/cloudflare/cloudflared/config.yml.example deploy/cloudflare/cloudflared/config.yml
+# 编辑 config.yml，把 <UUID> 换成真实值
+docker compose -f docker-compose.local.yml up -d --build
+```
+
+`<UUID>.json` 等价于隧道密码，`.gitignore` 已排除该目录下的 `*.json` 和 `config.yml`。
+
+两种模式下源站都写 `web:8000` 而不是 `127.0.0.1:8000`：`cloudflared` 和 `web` 在同一个
+compose 网络里，`web` 是服务名，由 Docker 内置 DNS 解析。宿主机上没有任何进程监听 8000。
+
+### 验证（两种模式相同）
+
+`docker compose logs cloudflared` 应出现 4 条 `Registered tunnel connection`；
+`curl https://demo.ghtrending.cyou/healthz` 的 `db`、`schema`、`model` 三项都应为 `true`。
 
 `.env` 已在仓库根 `.gitignore` 中排除，任何层级的 `.env` 都不会入库；`TUNNEL_TOKEN` 也不要
 贴进 issue、聊天或日志。

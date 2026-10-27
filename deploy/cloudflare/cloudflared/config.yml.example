@@ -1,0 +1,15 @@
+# 本地管理隧道的配置模板。复制成同目录的 config.yml 并把 <UUID> 换成真实值：
+#   cp cloudflared/config.yml.example cloudflared/config.yml
+#
+# 凭据文件由 `cloudflared tunnel create whodunit-ops` 生成，形如 <UUID>.json。
+# 它等价于隧道密码，不要提交到仓库（.gitignore 已排除本目录下的 *.json）。
+
+tunnel: <UUID>
+credentials-file: /etc/cloudflared/<UUID>.json
+
+ingress:
+  - hostname: demo.ghtrending.cyou
+    # web 是 compose 服务名，cloudflared 和它在同一个 Docker 网络里。
+    service: http://web:8000
+  # 兜底规则：不匹配任何 hostname 的请求返回 404，而不是透传到应用。
+  - service: http_status:404

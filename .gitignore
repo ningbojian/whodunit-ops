@@ -1,6 +1,10 @@
 # 密钥，绝不入库
 .env
 
+# Cloudflare 本地管理隧道的凭据（等价于隧道密码）
+deploy/cloudflare/cloudflared/*.json
+deploy/cloudflare/cloudflared/config.yml
+
 # Python
 __pycache__/
 *.py[cod]

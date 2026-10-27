@@ -1,0 +1,35 @@
+# 本地管理隧道：全程用 cloudflared 命令行配置，不经过 Zero Trust 控制台，
+# 因此不会遇到「创建 Zero Trust 组织需要绑定支付方式」那一步。
+#
+# 用法：docker compose -f docker-compose.local.yml up -d --build
+#
+# 前提（在本地电脑上完成，见 README）：
+#   cloudflared tunnel login
+#   cloudflared tunnel create whodunit-ops
+#   cloudflared tunnel route dns whodunit-ops demo.ghtrending.cyou
+# 然后把生成的 <UUID>.json 和 config.yml 放进本目录的 cloudflared/ 子目录。
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      # 大陆机器直连 pypi.org 经常慢到超时；在 .env 里设 PIP_INDEX_URL 换源即可。
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    restart: unless-stopped
+    env_file:
+      - .env
+    # 不发布到宿主机：容器只在这个 compose 网络里监听 8000。
+    expose:
+      - "8000"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - web
+    # 大陆网络对 QUIC 经常不稳，默认走 http2；确认稳定后可删掉 --protocol 换回 QUIC。
+    command: tunnel --no-autoupdate --protocol http2 --config /etc/cloudflared/config.yml run
+    volumes:
+      # 只读挂载：里面是隧道凭据，容器不需要写权限。
+      - ./cloudflared:/etc/cloudflared:ro

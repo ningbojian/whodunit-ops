@@ -24,7 +24,11 @@ HF_PUBLISH_SCRIPT = PROJECT_ROOT / "scripts" / "publish_hf_space.py"
 VPS_COMPOSE = PROJECT_ROOT / "deploy" / "vps" / "docker-compose.yml"
 VPS_CADDYFILE = PROJECT_ROOT / "deploy" / "vps" / "Caddyfile"
 CLOUDFLARE_COMPOSE = PROJECT_ROOT / "deploy" / "cloudflare" / "docker-compose.yml"
+CLOUDFLARE_LOCAL_COMPOSE = PROJECT_ROOT / "deploy" / "cloudflare" / "docker-compose.local.yml"
 CLOUDFLARE_README = PROJECT_ROOT / "deploy" / "cloudflare" / "README.md"
+CLOUDFLARE_CONFIG_EXAMPLE = (
+    PROJECT_ROOT / "deploy" / "cloudflare" / "cloudflared" / "config.yml.example"
+)
 
 # 真实 DeepSeek / Resend key 的随机主体远长于测试里的演示串；
 # 阈值取 24，避免把 sk-demo123456 这类故意保留的脱敏样例误报。
@@ -184,6 +188,8 @@ def test_gitignore_excludes_env_and_web_user_data():
     assert "!data/public_scripts_seed.csv" in text
     assert "backups/" in text
     assert re.search(r"^\*\.log$", text, re.MULTILINE)
+    # 隧道凭据等价于密码，本地管理模式生成的 json 不能入库。
+    assert "deploy/cloudflare/cloudflared/*.json" in text
     for entry in (
         "mobile_app/.dart_tool/",
         "mobile_app/build/",
@@ -352,6 +358,30 @@ def test_cloudflare_tunnel_readme_documents_origin():
     assert "TUNNEL_TOKEN" in text
     assert "--workers 1" in text
     assert not SECRET_LIKE.search(text)
+
+
+def test_cloudflare_local_tunnel_needs_no_token():
+    """本地管理隧道不经过 Zero Trust，因此不能依赖 TUNNEL_TOKEN 才能启动。"""
+    text = _read(CLOUDFLARE_LOCAL_COMPOSE)
+    body = _without_comments(text)
+
+    assert "cloudflare/cloudflared" in body
+    assert "--config /etc/cloudflared/config.yml" in body
+    assert "./cloudflared:/etc/cloudflared:ro" in body
+    assert "TUNNEL_TOKEN" not in body
+    assert "expose:" in body and '"8000"' in body
+    assert "ports:" not in body
+    assert body.count("restart: unless-stopped") == 2
+
+
+def test_cloudflare_config_example_routes_to_compose_service():
+    """ingress 必须指向 compose 服务名，并且有兜底规则。"""
+    text = _read(CLOUDFLARE_CONFIG_EXAMPLE)
+
+    assert "service: http://web:8000" in text
+    assert "service: http_status:404" in text
+    assert "credentials-file:" in text
+    assert "demo.ghtrending.cyou" in text
 
 
 def test_repository_contains_no_live_secret_shapes():
