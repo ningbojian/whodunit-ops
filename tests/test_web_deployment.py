@@ -38,6 +38,9 @@ def test_dockerfile_runs_single_non_root_worker():
     # Hugging Face Spaces 要求容器以 UID 1000 运行；同时保持非 root。
     assert "useradd" in text and "--uid 1000" in text
     assert "USER user" in text
+    # WORKDIR 由 root 创建，必须改回 user，否则 UID 1000 启动时建不了 data/。
+    assert "chown -R user:user /home/user" in text
+    assert text.index("USER user") > text.index("chown -R user:user")
     assert "--factory" in text
     assert "--workers 1" in text
     assert "--no-access-log" in text

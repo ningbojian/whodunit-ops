@@ -12,12 +12,14 @@ RUN useradd --create-home --uid 1000 user
 
 WORKDIR /home/user/app
 
+# 启动时 ensure_directories() 要往 data/ 里建目录；WORKDIR 建出来的目录属主是
+# root，必须先改回 user，否则 UID 1000 运行时直接 PermissionError。
+RUN mkdir -p /home/user/app/data && chown -R user:user /home/user
+
 COPY --chown=user:user requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=user:user app ./app
-
-RUN mkdir -p /home/user/app/data
 
 USER user
 
