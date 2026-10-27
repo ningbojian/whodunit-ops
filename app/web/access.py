@@ -402,7 +402,13 @@ class AccessStore:
                 raise RequestCooldown(pending)
 
             latest = self._latest_for_email(email_hash_value)
-            if latest is not None and cooldown_minutes > 0:
+            # email_failed 说明邮件没发出去，不该让用户等冷却；
+            # 允许立刻重试，否则一次 Resend 抖动会锁死 10 分钟。
+            if (
+                latest is not None
+                and latest.status != "email_failed"
+                and cooldown_minutes > 0
+            ):
                 cooldown = timedelta(minutes=cooldown_minutes)
                 if now - latest.created_at < cooldown:
                     retry = _retry_after(latest.created_at + cooldown, now)

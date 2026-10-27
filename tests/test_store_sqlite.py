@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.store.engine import create_database_engine, ensure_schema
+from app.store.engine import create_database_engine, ensure_schema, schema_ready
 from app.store.schema import sessions, tenants
 from app.store.sql import SqlStore, TenantConflictError
 from app.tools.frame import coerce_frame
@@ -445,3 +445,14 @@ class TestSqlPublicLibrary:
         result2 = library.ensure_seed()
         assert result2["seeded"] is False
         assert len(library.load()) == len(seeded)
+
+
+def test_schema_ready_detects_missing_tables(tmp_path):
+    # /healthz 用它区分「连得上库」和「表真的建好了」。
+    engine = create_database_engine(sqlite_path=tmp_path / "empty.sqlite3")
+    try:
+        assert schema_ready(engine) is False
+        ensure_schema(engine)
+        assert schema_ready(engine) is True
+    finally:
+        engine.dispose()

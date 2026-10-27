@@ -79,6 +79,8 @@ def env_base(**overrides) -> dict[str, str]:
         "WEB_SESSION_SECRET": "s" * 48,
         "OWNER_EMAIL": "owner@example.com",
         "EMAIL_BACKEND": "console",
+        # 生产配置要求模型 key；测试里模型一律注入 FakeLLM，这里只是占位。
+        "DEEPSEEK_API_KEY": "sk-test",
     }
     env.update(overrides)
     return env

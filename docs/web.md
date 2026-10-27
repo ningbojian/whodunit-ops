@@ -23,7 +23,7 @@
 - 同一邮箱重新获批进入同一租户；不同邮箱互相不可见、不可写。请求体不接受邮箱、uid 或文件路径，身份只来自签名 Session。
 - 如果两个不同完整哈希落到同一 16 位前缀，系统**拒绝创建或访问该租户**并报错，不共用数据（fail closed）。
 - 首次进入自动播种 4 个未来场次、2 条预约和 4 个同名剧本档案（演示时长是合成值），并尝试写入 3 个演示房间、3 个 DM、班次、阶段模板和演示分配；资源或模板播种失败不阻塞登录，可稍后在 `/resources` / `/stages` 手工补。数据库用 `tenants.seeded_at` 标记，播种在租户写锁内完成，只有一次；**已有数据绝不覆盖**。
-- Excel 兼容模式（`WEB_STORAGE_BACKEND=excel`）仍使用 `WEB_DATA_ROOT/users/<hash>/sessions.xlsx`、`bookings.xlsx` 与 `scripts.xlsx`，以 `.seeded` 文件保证幂等。该模式不再作为生产默认。
+- Excel 兼容模式（`WEB_STORAGE_BACKEND=excel`）使用 `WEB_DATA_ROOT/users/<hash>/sessions.xlsx`、`bookings.xlsx` 与 `scripts.xlsx`，以 `.seeded` 文件保证幂等。该模式只用于本地开发与导入导出；**生产环境会被启动校验拒绝**，因为容器磁盘是临时的。
 - 同一用户的轮次由该用户锁串行执行；数据库模式下同一租户的写入再用 Postgres 事务级 advisory lock 串行（SQLite 用进程内锁）。不用 `SELECT ... FOR UPDATE`，是因为它会和子表的 FK `KEY SHARE` 锁互相等待。单进程部署仍是硬约束。
 
 ## 安全上限

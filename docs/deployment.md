@@ -57,7 +57,7 @@ python -m app.store.export --tenant local --out backups/local
 
 ## 免费层与单 worker 限制
 
-- Render **免费实例的磁盘是临时的**，且会休眠；数据库模式下业务数据、审批记录与每日用量都在 Neon，**重启 Render 不会丢**。Excel 兼容模式（`WEB_STORAGE_BACKEND=excel`）仍依赖本地磁盘，重启会重置工作区与审批记录，旧的审批 / 备用链接随之失效。
+- Render **免费实例的磁盘是临时的**，且会休眠；数据库模式下业务数据、审批记录与每日用量都在 Neon，**重启 Render 不会丢**。Excel 兼容模式（`WEB_STORAGE_BACKEND=excel`）依赖本地磁盘，重启会重置工作区与审批记录，因此**生产环境已在启动校验中禁止该模式**。
 - Neon 免费版：约 1 GB 存储、100 CU-hours/月；无访问约 5 分钟后自动休眠，冷启动约 1–2 秒；没有 SLA。按单店几千场次、上万条预约估算，数据量远低于 1 GB。额度耗尽后写入可能失败；定期用 `python -m app.store.export` 导出备份。
 - 只能运行 **1 个 Uvicorn worker**。`InMemorySaver` 是进程内存储，多 worker 会导致同一用户的会话记忆分裂；数据库锁解决了业务数据并发写，但没有解决对话记忆。`Dockerfile` 已固定 `--workers 1`，不要在部署平台横向扩实例。
 - **对话记忆不持久**：Neon 只存场次、预约、剧本、审批与用量；重启进程后同一 `thread_id` 的聊天历史仍是空的。需要持久对话记忆需另接 checkpointer，本期不做。

@@ -227,12 +227,12 @@ def main(argv: list[str] | None = None) -> int:
     use_database = backend == "database" or (backend != "excel" and bool(database_url))
 
     if use_database:
-        from sqlalchemy import create_engine
-
-        from app.store.engine import ensure_schema
+        from app.store.engine import create_database_engine, ensure_schema
         from app.store.public_sql import SqlPublicLibrary
 
-        engine = create_engine(database_url)
+        # 必须走 normalize_database_url：Neon 控制台给的是 postgresql://，
+        # 裸 create_engine 会选未安装的 psycopg2 驱动。
+        engine = create_database_engine(database_url=database_url)
         ensure_schema(engine)
         library = SqlPublicLibrary(engine)
     else:

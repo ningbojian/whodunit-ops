@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -28,6 +29,8 @@ from app.web.access import (
 )
 from app.web.auth import _approval_email
 from app.web.mailer import EmailSendError
+
+logger = logging.getLogger(__name__)
 from app.web.operations import OperationsError
 from app.web.security import (
     InvalidEmail,
@@ -227,6 +230,12 @@ async def auth_request(request: Request):
         )
     except EmailSendError as exc:
         sent = False
+        # 移动端没有页面兜底，owner 只能从日志知道审批邮件没发出去。
+        logger.warning(
+            "approval email send failed request=%s reason=%s",
+            created.request.id,
+            exc.safe_reason(),
+        )
         request.app.state.access_store.mark_email_failed(
             created.request.id, exc.safe_reason()
         )

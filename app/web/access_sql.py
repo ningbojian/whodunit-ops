@@ -220,7 +220,12 @@ class DatabaseAccessStore:
                 raise RequestCooldown(pending)
 
             latest = self._latest_for_email(conn, email_hash_value)
-            if latest is not None and cooldown_minutes > 0:
+            # 与 AccessStore 保持一致：发送失败不算一次有效申请，不设冷却。
+            if (
+                latest is not None
+                and latest.status != "email_failed"
+                and cooldown_minutes > 0
+            ):
                 cooldown = timedelta(minutes=cooldown_minutes)
                 if now - latest.created_at < cooldown:
                     retry = _retry_after(latest.created_at + cooldown, now)

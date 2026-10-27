@@ -108,18 +108,33 @@ class TestStorageBackend:
                 )
             )
 
-    def test_production_can_explicitly_fall_back_to_excel(self, tmp_path):
-        settings = WebSettings.from_env(
-            env_base(
-                WEB_ENV="production",
-                EMAIL_BACKEND="resend",
-                RESEND_API_KEY="re_test",
-                PUBLIC_BASE_URL="https://example.com",
-                WEB_STORAGE_BACKEND="excel",
-                WEB_DATA_ROOT=str(tmp_path / "users"),
+    def test_production_rejects_excel_backend(self, tmp_path):
+        # 生产容器磁盘是临时的，Excel 模式会让重启丢掉全部数据。
+        with pytest.raises(WebConfigError, match="WEB_STORAGE_BACKEND"):
+            WebSettings.from_env(
+                env_base(
+                    WEB_ENV="production",
+                    EMAIL_BACKEND="resend",
+                    RESEND_API_KEY="re_test",
+                    PUBLIC_BASE_URL="https://example.com",
+                    WEB_STORAGE_BACKEND="excel",
+                    WEB_DATA_ROOT=str(tmp_path / "users"),
+                )
             )
-        )
-        assert settings.storage_backend == "excel"
+
+    def test_production_requires_deepseek_key(self):
+        with pytest.raises(WebConfigError, match="DEEPSEEK_API_KEY"):
+            WebSettings.from_env(
+                env_base(
+                    WEB_ENV="production",
+                    EMAIL_BACKEND="resend",
+                    RESEND_API_KEY="re_test",
+                    PUBLIC_BASE_URL="https://example.com",
+                    DEEPSEEK_API_KEY="",
+                    WEB_STORAGE_BACKEND="database",
+                    DATABASE_URL="postgresql://user:pass@example.neon.tech/neondb",
+                )
+            )
 
     def test_unknown_backend_rejected(self):
         with pytest.raises(WebConfigError, match="WEB_STORAGE_BACKEND"):

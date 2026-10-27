@@ -126,7 +126,7 @@ python -m app.web.main         # http://127.0.0.1:8000/login
 
 **代码已实现，尚未公网部署。**网页版可在本地跑通「申请 → 开发者邮件审批 → 8 小时访问 → 到期重新申请」全流程，每邮箱数据隔离（`tenant_id = email_hash[:16]`，不同邮箱互不可见）。**当前没有公网实例**，**尚未实际公网部署**。
 
-- **存储**：业务数据、审批记录与每日用量可存入 Neon Postgres（`WEB_STORAGE_BACKEND=database`）；本地不填 `DATABASE_URL` 时写 `data/web.sqlite3`；`WEB_STORAGE_BACKEND=excel` 仍按每邮箱目录用 Excel，已不是生产默认。
+- **存储**：业务数据、审批记录与每日用量可存入 Neon Postgres（`WEB_STORAGE_BACKEND=database`）；本地不填 `DATABASE_URL` 时写 `data/web.sqlite3`。**生产环境已禁止 `WEB_STORAGE_BACKEND=excel`**——临时磁盘会在重启后丢光数据，启动校验直接报错。
 - **已验证**：**Neon 项目 `shiyuan`（分支 `production`）已创建**，schema 已建，本机 uvicorn 的申请 / 审批 / 领取 / 看板 HTTP 链路端到端验收通过；2026-10-20 用真实 Resend 向 `OWNER_EMAIL` 发信成功（只验证了 Resend 账号本人收件）。**生产业务数据尚未正式导入。**
 - **部署前还需要**：把**注册 Resend** 时创建的 API key 与生成的 `WEB_SESSION_SECRET` 配进 Render 环境变量，并设置 `EMAIL_BACKEND=resend`、`EMAIL_FROM=onboarding@resend.dev`、`WEB_STORAGE_BACKEND=database`（本地 Resend 发信已验证，Render 侧尚未配置）。开发机未装 Docker，所以 Dockerfile 与 `render.yaml` 虽然写好，但**尚未实际公网部署**。
 - **限制**：**只能运行 1 个 Uvicorn worker**——`InMemorySaver` 是进程内存储，多 worker 会让同一用户的会话记忆分裂。**对话记忆不持久**：重启进程后聊天历史为空。Render **免费实例的磁盘是临时的**且会休眠，所以业务数据必须放 Neon。

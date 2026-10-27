@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ from app.store.engine import (
     dispose_engine,
     ensure_schema,
     ping_engine,
+    schema_ready,
 )
 from app.store.workspace import DatabaseWorkspaceManager
 from app.tools.dm_control import DMControlError
@@ -206,6 +208,11 @@ def create_app(
 ) -> FastAPI:
     config = settings or WebSettings.from_env()
     config.ensure_directories()
+    # 线上排障只能看平台日志，INFO 级别的业务审计和完整 traceback 必须留下。
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     clock = now_fn or (lambda: datetime.now(UTC))
 
     engine = None
@@ -220,9 +227,9 @@ def create_app(
         try:
             ensure_schema(engine)
         except Exception as exc:  # noqa: BLE001 - 启动失败时由 /healthz 反映
-            # 不打印连接串或密码；Neon 暂时不可用时仍让进程启动，
-            # 健康检查返回 503，而不是静默回退到 Excel。
-            logger.warning("database schema init failed: %s", type(exc).__name__)
+            # 不打印连接串或密码；traceback 里 SQLAlchemy 会自动隐藏密码。
+            # 进程仍启动，健康检查返回 503，而不是静默回退到 Excel。
+            logger.exception("database schema init failed: %s", type(exc).__name__)
         access_store = DatabaseAccessStore(engine, now_fn=clock)
         usage = DatabaseUsageStore(
             engine,
@@ -445,7 +452,7 @@ def create_app(
         path = request.url.path
         if path.startswith("/approve/"):
             path = "/approve/<redacted>"
-        logger.error(
+        logger.exception(
             "unhandled error path=%s type=%s",
             path,
             type(exc).__name__,
@@ -502,11 +509,22 @@ def create_app(
 
     @app.get("/healthz")
     def healthz(request: Request):
-        healthy = usage.ping() and access_store.ping()
+        db_ok = usage.ping() and access_store.ping()
+        schema_ok = True
         if engine is not None:
-            healthy = healthy and ping_engine(engine)
+            db_ok = db_ok and ping_engine(engine)
+            schema_ok = schema_ready(engine)
+        model_ok = bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
+        # 模型 key 只约束生产：离线测试与本地演示不需要它。
+        healthy = db_ok and schema_ok and (model_ok or not config.is_production)
         return JSONResponse(
-            {"ok": healthy, "status": "ok" if healthy else "degraded"},
+            {
+                "ok": healthy,
+                "status": "ok" if healthy else "degraded",
+                "db": db_ok,
+                "schema": schema_ok,
+                "model": model_ok,
+            },
             status_code=200 if healthy else 503,
             headers={"Cache-Control": "no-store"},
         )

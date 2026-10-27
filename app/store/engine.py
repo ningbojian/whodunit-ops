@@ -124,6 +124,40 @@ def ping_engine(engine: Engine | None) -> bool:
         return False
 
 
+_REQUIRED_TABLES = ("access_requests", "tenants")
+
+
+def schema_ready(engine: Engine | None) -> bool:
+    """健康检查用：两张核心表都存在才算 schema 就绪。
+
+    只判断表是否存在，不比对列。`create_all` 不会修改已存在的表，
+    列漂移要靠人工核对（见 docs/deployment.md）。
+    """
+    if engine is None:
+        return False
+    try:
+        with engine.connect() as conn:
+            if engine.dialect.name == "postgresql":
+                ready = conn.execute(
+                    text(
+                        "SELECT to_regclass('public.tenants') IS NOT NULL "
+                        "AND to_regclass('public.access_requests') IS NOT NULL"
+                    )
+                ).scalar()
+                return bool(ready)
+            rows = conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name IN ('tenants', 'access_requests')"
+                )
+            ).fetchall()
+            return len(rows) == len(_REQUIRED_TABLES)
+    except SQLAlchemyError:
+        return False
+    except Exception:  # noqa: BLE001 - 健康检查不能向上抛
+        return False
+
+
 def dispose_engine(engine: Engine | None) -> None:
     if engine is None:
         return
@@ -141,5 +175,6 @@ __all__ = [
     "normalize_database_url",
     "ping_engine",
     "redact_database_url",
+    "schema_ready",
     "sqlite_url",
 ]

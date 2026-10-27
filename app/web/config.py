@@ -210,6 +210,12 @@ class WebSettings:
         if len(session_secret) < 32:
             raise WebConfigError("WEB_SESSION_SECRET 至少需要 32 个字符")
 
+        if production and not _text(env_map, "DEEPSEEK_API_KEY"):
+            raise WebConfigError(
+                "生产环境缺少 DEEPSEEK_API_KEY：站点会显示健康，"
+                "但每次对话都会返回 503。"
+            )
+
         owner_raw = _text(env_map, "OWNER_EMAIL")
         if not owner_raw:
             raise WebConfigError("缺少 OWNER_EMAIL（审批邮件的收件人）")
@@ -268,6 +274,11 @@ class WebSettings:
             raise WebConfigError(
                 f"WEB_STORAGE_BACKEND 只能是 {sorted(VALID_STORAGE_BACKENDS)}，"
                 f"当前为 {storage_backend!r}"
+            )
+        if production and storage_backend == "excel":
+            raise WebConfigError(
+                "生产环境不能使用 WEB_STORAGE_BACKEND=excel："
+                "容器磁盘是临时的，重启会丢掉全部业务数据。请改用 database。"
             )
 
         database_url = _text(env_map, "DATABASE_URL") or None

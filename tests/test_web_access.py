@@ -101,6 +101,15 @@ class TestCreateRequest:
         second = _create(store)
         assert second.request.id != first.request.id
 
+    def test_email_failed_does_not_arm_cooldown(self, tmp_path):
+        # 发送失败等于申请没送达，不应让用户在 10 分钟内无法重试。
+        store = make_store(tmp_path, MutableClock())
+        first = _create(store)
+        assert store.mark_email_failed(first.request.id, "network_timeout") is True
+
+        second = _create(store)
+        assert second.request.id != first.request.id
+
     def test_ip_limit(self, tmp_path):
         clock = MutableClock()
         store = make_store(tmp_path, clock)
