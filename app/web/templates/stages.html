@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}阶段模板{% endblock %}
+{% block page %}stages{% endblock %}
+{% block body %}
+{% include "partials/nav.html" %}
+<main class="page-shell" data-stages-page data-script-id="{{ data.selected.script.script_id if data.selected else '' }}">
+  <section class="page-head">
+    <div>
+      <p class="eyebrow">DM 场控</p>
+      <h1>剧本阶段模板</h1>
+      <p class="muted">
+        模板是 DM 端的只读提示。保存后只影响下一场；进行中的场控使用开场时的快照。
+      </p>
+    </div>
+  </section>
+
+  <div class="two-column stages-layout">
+    <aside class="panel">
+      <h2>剧本</h2>
+      <nav class="script-list" aria-label="剧本列表">
+        {% for script in data.scripts %}
+        <a href="/stages?script_id={{ script.script_id }}"
+           class="script-item {% if data.selected and script.script_id == data.selected.script.script_id %}active{% endif %}">
+          <span>{{ script.script_name }}</span>
+          <span class="chip {{ 'ok' if script.has_template else 'warn' }}">{{ '已有模板' if script.has_template else '未建' }}</span>
+        </a>
+        {% else %}
+        <p class="empty-state">剧本库为空。先在对话里建档，或载入演示数据。</p>
+        {% endfor %}
+      </nav>
+    </aside>
+
+    <section class="panel">
+      {% if data.selected %}
+      <div class="panel-head">
+        <div>
+          <h2>{{ data.selected.script.script_name }}</h2>
+          <p class="muted">
+            {% if data.selected.version %}模板版本 v{{ data.selected.version }} · {% endif %}
+            {{ data.selected.stages|length }} 个阶段（{{ data.selected.active_count }} 个启用）
+          </p>
+        </div>
+        <button type="button" class="secondary small" id="apply-sample-button">套用示例阶段</button>
+      </div>
+
+      {% if not data.selected.stages %}
+      <p class="empty-state">这个剧本还没有阶段模板。可以套用示例后再修改，或手动添加。</p>
+      {% endif %}
+
+      <form id="stages-form" class="stack" data-stages-form data-script-id="{{ data.selected.script.script_id }}">
+        <div id="stage-rows" class="stage-rows">
+          {% for stage in data.selected.stages %}
+          <article class="stage-row" data-stage-row>
+            <div class="stage-row-head">
+              <span class="stage-seq mono">{{ loop.index }}</span>
+              <input type="text" data-field="name" value="{{ stage.name }}" maxlength="60" required aria-label="阶段名">
+              <div class="row-actions">
+                <button type="button" class="secondary small" data-move="up">上移</button>
+                <button type="button" class="secondary small" data-move="down">下移</button>
+                <button type="button" class="danger small" data-remove-row>删除</button>
+              </div>
+            </div>
+            <div class="field-row">
+              <div>
+                <label>类型</label>
+                <select data-field="stage_type">
+                  {% for value, label in [('opening','开场'),('search','搜证'),('discussion','讨论'),('vote','投票'),('reveal','揭晓'),('ending','收尾'),('custom','自定义')] %}
+                  <option value="{{ value }}" {% if stage.stage_type == value %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div>
+                <label>计划时长（分钟）</label>
+                <input type="number" data-field="duration_minutes" min="1" max="240" value="{{ stage.duration_minutes }}" required>
+              </div>
+              <div>
+                <label>提前提醒（秒）</label>
+                <input type="number" data-field="warn_before_seconds" min="0" max="14400" value="{{ stage.warn_before_seconds }}">
+              </div>
+            </div>
+            <label>DM 提示（不下发玩家）</label>
+            <textarea data-field="cue_text" rows="2" maxlength="2000">{{ stage.cue_text or '' }}</textarea>
+            <label>到点提醒文案</label>
+            <input type="text" data-field="prompt_text" maxlength="200" value="{{ stage.prompt_text or '' }}">
+            <label>硬件场景 JSON（可选）</label>
+            <textarea data-field="hardware_scene" rows="2" maxlength="2048" placeholder='{"light":"warm_low","sound":"intro_01"}'>{{ (stage.hardware_scene|tojson) if stage.hardware_scene else '' }}</textarea>
+          </article>
+          {% endfor %}
+        </div>
+
+        <template id="stage-row-template">
+          <article class="stage-row" data-stage-row>
+            <div class="stage-row-head">
+              <span class="stage-seq mono"></span>
+              <input type="text" data-field="name" maxlength="60" required aria-label="阶段名" placeholder="第一幕 / 搜证">
+              <div class="row-actions">
+                <button type="button" class="secondary small" data-move="up">上移</button>
+                <button type="button" class="secondary small" data-move="down">下移</button>
+                <button type="button" class="danger small" data-remove-row>删除</button>
+              </div>
+            </div>
+            <div class="field-row">
+              <div>
+                <label>类型</label>
+                <select data-field="stage_type">
+                  <option value="opening">开场</option>
+                  <option value="search">搜证</option>
+                  <option value="discussion">讨论</option>
+                  <option value="vote">投票</option>
+                  <option value="reveal">揭晓</option>
+                  <option value="ending">收尾</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </div>
+              <div>
+                <label>计划时长（分钟）</label>
+                <input type="number" data-field="duration_minutes" min="1" max="240" value="30" required>
+              </div>
+              <div>
+                <label>提前提醒（秒）</label>
+                <input type="number" data-field="warn_before_seconds" min="0" max="14400" value="60">
+              </div>
+            </div>
+            <label>DM 提示（不下发玩家）</label>
+            <textarea data-field="cue_text" rows="2" maxlength="2000"></textarea>
+            <label>到点提醒文案</label>
+            <input type="text" data-field="prompt_text" maxlength="200">
+            <label>硬件场景 JSON（可选）</label>
+            <textarea data-field="hardware_scene" rows="2" maxlength="2048" placeholder='{"light":"warm_low"}'></textarea>
+          </article>
+        </template>
+
+        <div class="inline-actions">
+          <button type="button" class="secondary" id="add-stage-button">添加阶段</button>
+          <button type="submit" class="primary">保存模板</button>
+        </div>
+        <p id="stages-status" class="chat-status" role="status" aria-live="polite"></p>
+      </form>
+      {% else %}
+      <p class="empty-state">选择左侧剧本查看阶段模板。</p>
+      {% endif %}
+    </section>
+  </div>
+
+  <p class="fine-print">
+    倒计时到期只会提醒和标记超时，服务端不会自动推进阶段。DM 始终拥有阶段最高控制权。
+  </p>
+</main>
+{% endblock %}

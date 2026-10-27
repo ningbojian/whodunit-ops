@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}渠道单{% endblock %}
+{% block page %}imports{% endblock %}
+{% block body %}
+{% include "partials/nav.html" %}
+<main class="page-shell" data-imports-page data-as-of="{{ data.as_of }}">
+  <section class="page-head">
+    <div>
+      <p class="eyebrow">预约与渠道订单</p>
+      <h1>快速记单与点评导入</h1>
+      <p class="muted">
+        本版不提供大众点评实时接口。导入只读取你手工导出的文件；导入前请留意数据截止时间。
+      </p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>快速占位</h2>
+    <p class="muted">适合电话或微信里确认的散客。每次点击都会生成独立的幂等引用，重复提交不会重复加座。</p>
+    <form id="quick-booking-form" class="stack" data-quick-form>
+      <label for="quick-session">场次</label>
+      <select id="quick-session" name="session_id" required>
+        {% for session in data.sessions %}
+        <option value="{{ session.session_id }}"
+                data-remaining="{{ session.remaining_seats if session.remaining_seats is defined else '' }}">
+          {{ session.start_time }} · {{ session.script_name }} · 已约 {{ session.booked_seats }}/{{ session.total_seats or '未填' }}
+        </option>
+        {% endfor %}
+      </select>
+      <div class="field-row">
+        <div>
+          <label for="quick-seats">人数</label>
+          <input id="quick-seats" name="seats" type="number" min="1" max="20" value="1" required>
+        </div>
+        <div>
+          <label for="quick-name">称呼（可选）</label>
+          <input id="quick-name" name="player_name" type="text" maxlength="40" placeholder="散客">
+        </div>
+      </div>
+      <button type="submit" class="primary">记一笔</button>
+    </form>
+    <p id="quick-status" class="chat-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="panel">
+    <h2>大众点评订单导出</h2>
+    <ol class="steps">
+      <li>在点评商家后台按订单导出 CSV 或 XLSX；不需要手机号。</li>
+      <li>先预览，核对场次匹配、净增座位和超容量拒绝。</li>
+      <li>确认后导入。重复导入同一文件不会重复加座。</li>
+    </ol>
+    <form id="dianping-preview-form" class="stack" data-dianping-preview>
+      <label for="dianping-file">订单文件</label>
+      <input id="dianping-file" name="file" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+      <label for="dianping-as-of">数据截止时间（可选）</label>
+      <input id="dianping-as-of" name="data_as_of" type="datetime-local">
+      <div class="inline-actions">
+        <button type="submit" class="secondary">预览</button>
+        <button type="button" class="primary" id="dianping-commit" disabled>确认导入</button>
+      </div>
+    </form>
+    <div id="dianping-result" class="plan-panel hidden" role="status" aria-live="polite"></div>
+  </section>
+
+  <section class="panel">
+    <h2>防超卖边界</h2>
+    <ul class="plain-list">
+      <li>系统内部：快速记单、聊天预约和批量导入都在同一把租户写锁内复核容量，不会内部超售。</li>
+      <li>外部渠道：点评端在两次导入之间仍可能接单；本系统只能在导入后立即反映并拒绝超容量写入。</li>
+      <li>不抓取点评页面、不登录商家后台、不绕过验证码或限流。</li>
+    </ul>
+  </section>
+
+  <p class="fine-print">数据截止 {{ data.as_of }}。导入不会创建新场次；匹配不到的订单会列为未匹配。</p>
+</main>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}场控{% endblock %}
+{% block page %}runs{% endblock %}
+{% block body %}
+{% include "partials/nav.html" %}
+<main class="page-shell" data-runs-page data-day="{{ data.day }}" data-server-now="{{ data.server_now }}">
+  <section class="page-head">
+    <div>
+      <p class="eyebrow">DM 场控</p>
+      <h1>今日场控</h1>
+      <p class="muted">
+        这里是只读直播。阶段只能由 DM 在 DM 端手动推进；商家不能远程推进、暂停或结束。
+      </p>
+    </div>
+    <div class="page-actions">
+      <a class="button-link secondary" href="/schedule">去排期生成场控码</a>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>{{ data.day }}</h2>
+      <span class="muted">每 10 秒刷新</span>
+    </div>
+    <div class="card-list">
+      {% for item in data.runs %}
+      <article class="session-card run-card" data-run-card="{{ item.run.run_id }}">
+        <div class="resource-head">
+          <strong>{{ item.session.script_name if item.session else '场次已删除' }}</strong>
+          <span class="chip {{ 'ok' if item.run.status == 'active' else 'warn' if item.run.status == 'paused' else '' }}">{{ item.run.status }}</span>
+        </div>
+        <p class="muted">
+          {{ item.session.start_time if item.session else '—' }}
+          · {{ item.run.room_name or '房间未定' }}
+          · {{ item.run.dm_name or '临时 DM' }}
+        </p>
+        <div class="run-summary">
+          <span>阶段 <strong class="mono">{{ item.run.current_seq or '—' }}</strong></span>
+          <span>模式 {{ '硬件' if item.run.mode == 'hardware' else '软件' }}</span>
+          <span class="mono" data-run-remaining="{{ item.run.remaining_seconds if item.run.remaining_seconds is not none else '' }}"
+                data-run-overtime="{{ item.run.overtime_seconds or 0 }}"
+                data-run-status="{{ item.run.status }}">—</span>
+          {% if item.run.hardware_degraded %}<span class="chip warn">硬件已降级</span>{% endif %}
+        </div>
+        <div class="inline-actions">
+          <a class="button-link primary small" href="/runs/{{ item.run.run_id }}">查看直播</a>
+        </div>
+      </article>
+      {% else %}
+      <p class="empty-state">今天还没有场控。先在排期页给一场生成场控码。</p>
+      {% endfor %}
+    </div>
+  </section>
+
+  <p class="fine-print">
+    倒计时由 DM 端本地展示；到期只提醒并标记超时，不会自动切换阶段。
+  </p>
+</main>
+{% endblock %}

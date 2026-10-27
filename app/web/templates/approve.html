@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}访问审批{% endblock %}
+{% block page %}approve{% endblock %}
+{% block body %}
+<main class="auth-shell">
+  <section class="card auth-card wide" aria-labelledby="approve-title">
+    <p class="eyebrow">开发者审批</p>
+    <h1 id="approve-title">网页版访问申请</h1>
+
+    {% if message %}
+    <p class="notice" role="status">{{ message }}</p>
+    {% endif %}
+
+    {% if valid %}
+    <dl class="facts">
+      <div>
+        <dt>申请编号</dt>
+        <dd class="mono">{{ record.id }}</dd>
+      </div>
+      <div>
+        <dt>称呼</dt>
+        <dd>{{ record.display_name }}</dd>
+      </div>
+      <div>
+        <dt>邮箱</dt>
+        <dd>{{ record.email }}</dd>
+      </div>
+      <div>
+        <dt>申请时间（UTC+8）</dt>
+        <dd>{{ created_at }}</dd>
+      </div>
+      <div>
+        <dt>审批链接有效期至（UTC+8）</dt>
+        <dd>{{ approval_expires_at }}</dd>
+      </div>
+      {% if status == "approved" %}
+      <div>
+        <dt>访问到期时间（UTC+8）</dt>
+        <dd>{{ access_expires_at }}</dd>
+      </div>
+      {% endif %}
+      <div>
+        <dt>当前状态</dt>
+        <dd>{{ status }}</dd>
+      </div>
+    </dl>
+    {% endif %}
+
+    {% if status == "pending" and valid %}
+    <div class="approval-actions">
+      <form method="post" action="">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="action" value="approve">
+        <button type="submit" class="primary">批准（{{ access_hours }} 小时）</button>
+      </form>
+      <form method="post" action="">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="action" value="reject">
+        <button type="submit" class="danger">拒绝</button>
+      </form>
+    </div>
+    <p class="muted">
+      批准后，用户页面会自动解锁；你也可以把备用链接转发给用户。
+      审批链接只能处理一次，处理后会立即失效。
+    </p>
+    {% elif status == "approved" %}
+      {% if magic_link %}
+      <div class="magic-link">
+        <label for="magic-link">备用访问链接（{{ access_hours }} 小时内有效）</label>
+        <div class="copy-row">
+          <input id="magic-link" class="mono" type="text" readonly value="{{ magic_link }}">
+          <button type="button" class="secondary" data-copy-target="magic-link">复制</button>
+        </div>
+        <p class="muted">这条链接只在本次批准后显示；请通过你信任的渠道转发给申请人。</p>
+      </div>
+      {% else %}
+      <p class="muted">
+        这条申请已经批准过。为安全起见，备用链接只在批准成功的那一刻显示；
+        如果用户没有打开页面，可以让他重新申请，或让他在原浏览器会话中打开等待页。
+      </p>
+      {% endif %}
+    {% elif status == "rejected" %}
+    <p class="muted">这条申请已被拒绝。用户需要重新提交申请。</p>
+    {% elif status == "expired" %}
+    <p class="muted">审批链接或访问已经过期。用户需要重新提交申请。</p>
+    {% elif status == "email_failed" %}
+    <p class="muted">这条申请的审批邮件发送失败，未生效。用户需要重新提交申请。</p>
+    {% endif %}
+
+    <div class="fine-print">
+      <p>审批页不要求开发者登录；审批链接本身就是高熵能力凭证，请勿转发到公开群聊。</p>
+      <p>批准只会授予申请邮箱对应的数据工作区访问权，不会授予其他用户的数据。</p>
+    </div>
+  </section>
+</main>
+{% endblock %}

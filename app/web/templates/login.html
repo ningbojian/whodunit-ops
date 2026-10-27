@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}申请访问{% endblock %}
+{% block page %}login{% endblock %}
+{% block body %}
+<main class="auth-shell">
+  <section class="card auth-card" aria-labelledby="login-title">
+    <p class="eyebrow">私域运营辅助工具</p>
+    <h1 id="login-title">{{ product_name }}</h1>
+    <p class="lede">拼场、预约、风险诊断和营销文案，一次对话完成。</p>
+
+    {% if notice %}
+    <p class="notice" role="status">{{ notice }}</p>
+    {% endif %}
+    {% if error %}
+    <p class="error" role="alert">{{ error }}</p>
+    {% endif %}
+    {% if console_email %}
+    <p class="notice" role="status">
+      当前是本地控制台邮件模式，<strong>不会真的发送邮件</strong>。
+      提交后，审批链接会打印在运行服务端的终端里（搜索“本地邮件”）。
+    </p>
+    {% endif %}
+
+    <form method="post" action="/request" class="stack" autocomplete="on">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label for="email">邮箱</label>
+      <input id="email" name="email" type="email" maxlength="254"
+             autocomplete="email" required
+             value="{{ email or '' }}" placeholder="you@example.com">
+
+      <label for="display_name">称呼 <span class="muted">（可选）</span></label>
+      <input id="display_name" name="display_name" type="text" maxlength="40"
+             autocomplete="nickname"
+             value="{{ display_name or '' }}" placeholder="例如：阿青">
+
+      <button type="submit" class="primary">提交访问申请</button>
+    </form>
+
+    <div class="fine-print">
+      <p>提交后会给开发者发一封审批邮件。批准后 {{ access_hours }} 小时内可访问，到期需要重新申请。</p>
+      <p>本工具面向门店店长 / 运营人员，暂不对玩家开放；玩家仍通过店长人工确认预约。</p>
+      <p>系统只保存邮箱、称呼和审批记录，用于授权与数据隔离；不会读取你的微信，也不会自动发消息。</p>
+      <p>你的写入只影响自己的数据副本，不会影响其他用户。</p>
+    </div>
+  </section>
+</main>
+{% endblock %}

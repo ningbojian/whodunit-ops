@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}排期{% endblock %}
+{% block page %}schedule{% endblock %}
+{% block body %}
+{% include "partials/nav.html" %}
+<main class="page-shell" data-schedule-page data-as-of="{{ data.as_of }}">
+  <section class="page-head">
+    <div>
+      <p class="eyebrow">资源排期</p>
+      <h1>未来 7 天</h1>
+      <p class="muted">
+        录入场次只需要剧本和开场时间；房间与 DM 默认自动分配，可在建场卡片里手动指定。
+        系统不会自动改开场时间，也不会取消场次。
+      </p>
+    </div>
+    <div class="page-actions">
+      <button type="button" class="primary" id="add-session-button">新增场次</button>
+      <button type="button" class="secondary" id="auto-assign-button">补齐未分配</button>
+      <button type="button" class="secondary" id="plan-button">生成优化方案</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head board-tabs-head">
+      <div class="board-tabs" role="tablist" aria-label="看板视图">
+        <button type="button" class="board-tab board-tab--active"
+                id="tab-time-board" role="tab" aria-selected="true"
+                aria-controls="time-board" data-board-tab="time">时间看板</button>
+        <button type="button" class="board-tab"
+                id="tab-status-board" role="tab" aria-selected="false"
+                aria-controls="status-board" data-board-tab="status">状态看板</button>
+      </div>
+      <span class="muted" id="board-hint">{{ data.window.start }} 至 {{ data.window.end }} · 拖动卡片改期；点空位弹出建场卡片</span>
+    </div>
+    {# 客户端建板：app.js initTimeBoard / initStatusBoard 读 /api/schedule 后渲染。 #}
+    <div id="time-board" class="kanban-board"
+         data-window-start="{{ data.window.start }}"
+         data-window-end="{{ data.window.end }}"
+         role="tabpanel" aria-labelledby="tab-time-board"
+         aria-label="未来 7 天时间看板"></div>
+    <div id="status-board" class="status-board hidden"
+         role="tabpanel" aria-labelledby="tab-status-board"
+         aria-label="场次状态看板"></div>
+    <noscript>
+      <p class="empty-state">
+        当前浏览器未启用 JavaScript，看板与建场卡片都无法使用。
+        可启用 JavaScript 后刷新；下面列出了本窗口内的场次。
+      </p>
+      <div class="card-list">
+        {% for session in data.sessions %}
+        <article class="session-card" data-session="{{ session.session_id }}">
+          <div class="resource-head">
+            <strong>{{ session.script_name }}</strong>
+            <span class="chip {{ 'ok' if session.room_id and session.dm_id else 'warn' }}">
+              {{ '已排' if session.room_id and session.dm_id else '待排' }}
+            </span>
+          </div>
+          <p class="mono">{{ session.start_time }}</p>
+          <div class="session-meta">
+            <span>房间：{{ session.room_name or '未分配' }}</span>
+            <span>DM：{{ session.dm_name or '未分配' }}</span>
+            <span>已约 {{ session.booked_seats }} / {{ session.total_seats or '未填' }}</span>
+            <span>{{ session.status }}</span>
+          </div>
+        </article>
+        {% else %}
+        <p class="empty-state">这个时间段没有场次。可在对话里录入，或启用 JavaScript 后用建场卡片新增。</p>
+        {% endfor %}
+      </div>
+    </noscript>
+  </section>
+
+  <dialog id="create-dialog" class="dialog dialog--wide">
+    <form id="session-form" class="stack" data-session-form>
+      <h2>新增场次</h2>
+      <p class="muted">房间与 DM 默认自动分配；手动指定会覆盖自动结果，不会改动开场时间。</p>
+      <div class="picker-block">
+        <label for="session-script-search">剧本</label>
+        <div class="script-picker">
+          <input id="session-script-search" type="text" autocomplete="off"
+                 maxlength="80" placeholder="筛选剧本名；也可只用类型/人数筛选">
+          <div id="script-results" class="script-results hidden"></div>
+        </div>
+        <div id="script-selected" class="chip-row"></div>
+      </div>
+      <div class="field-row">
+        <div class="picker-block">
+          <label for="session-script-type">剧本类型</label>
+          <select id="session-script-type">
+            <option value="">全部类型</option>
+            <option value="推理">推理</option>
+            <option value="情感">情感</option>
+            <option value="恐怖">恐怖</option>
+            <option value="欢乐">欢乐</option>
+            <option value="机制">机制</option>
+            <option value="阵营">阵营</option>
+            <option value="开放">开放</option>
+          </select>
+        </div>
+        <div class="picker-block">
+          <span class="picker-label">剧本人数（筛选剧本）</span>
+          <div id="session-script-players" class="chip-row" role="group" aria-label="剧本人数筛选"></div>
+        </div>
+      </div>
+      <div class="picker-block">
+        <span class="picker-label">日期</span>
+        <div id="session-days" class="chip-row" role="group" aria-label="开场日期"></div>
+      </div>
+      <div class="picker-block">
+        <span class="picker-label">时间</span>
+        <div id="session-hours" class="chip-row" role="group" aria-label="开场小时"></div>
+        <div id="session-minutes" class="chip-row" role="group" aria-label="开场分钟"></div>
+      </div>
+      <div class="field-row">
+        <div>
+          <label for="session-room">房间</label>
+          <select id="session-room">
+            <option value="">自动分配（推荐）</option>
+            {% for room in data.rooms %}{% if room.active %}
+            <option value="{{ room.room_id }}">{{ room.name }}（{{ room.capacity or '容量未填' }} 人）</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="session-dm">DM</label>
+          <select id="session-dm">
+            <option value="">自动分配（推荐）</option>
+            {% for dm in data.dms %}{% if dm.active %}
+            <option value="{{ dm.dm_id }}">{{ dm.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+      </div>
+      <details class="more-fields">
+        <summary>更多信息（可选）</summary>
+        <div class="field-row">
+          <div>
+            <label for="session-seats">场次人数</label>
+            <input id="session-seats" name="total_seats" type="number" min="1" max="40">
+          </div>
+          <div>
+            <label for="session-price">原价</label>
+            <input id="session-price" name="list_price" type="number" min="0" step="0.01">
+          </div>
+        </div>
+      </details>
+      <div class="inline-actions">
+        <button type="button" class="secondary" id="create-cancel">取消</button>
+        <button type="submit" class="primary" id="session-submit" disabled>建场</button>
+      </div>
+      <p id="create-status" class="chat-status" role="status" aria-live="polite"></p>
+      <div id="session-result" class="plan-panel hidden" role="status" aria-live="polite"></div>
+    </form>
+  </dialog>
+
+  <dialog id="preview-dialog" class="dialog dialog--wide">
+    <div class="stack">
+      <h2 id="preview-title">审核改动</h2>
+      <p id="preview-summary" class="muted"></p>
+      <div id="preview-list" class="dialog-body stack"></div>
+      <div id="preview-meta" class="preview-meta"></div>
+      <div class="inline-actions preview-actions">
+        <button type="button" class="secondary small" id="preview-select-all">全选</button>
+        <button type="button" class="secondary small" id="preview-select-none">全不选</button>
+        <button type="button" class="secondary" id="preview-cancel">取消</button>
+        <button type="button" class="primary" id="preview-apply" disabled>应用所选 (0)</button>
+      </div>
+      <p id="preview-status" class="chat-status" role="status" aria-live="polite"></p>
+    </div>
+  </dialog>
+
+  <dialog id="assign-dialog" class="dialog">
+    <form method="dialog" class="stack">
+      <h2>手工调整资源</h2>
+      <p class="muted">手工调整会覆盖该场原有的自动分配，不会改动开场时间。</p>
+      <label for="assign-room">房间</label>
+      <select id="assign-room">
+        <option value="">保持当前</option>
+        {% for room in data.rooms %}
+        <option value="{{ room.room_id }}">{{ room.name }}（{{ room.capacity or '容量未填' }} 人）</option>
+        {% endfor %}
+      </select>
+      <label for="assign-dm">DM</label>
+      <select id="assign-dm">
+        <option value="">保持当前</option>
+        {% for dm in data.dms %}
+        <option value="{{ dm.dm_id }}">{{ dm.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="inline-actions">
+        <button type="button" class="secondary" id="assign-cancel">取消</button>
+        <button type="button" class="primary" id="assign-confirm">应用</button>
+      </div>
+      <p id="assign-status" class="chat-status" role="status" aria-live="polite"></p>
+    </form>
+  </dialog>
+
+  <dialog id="run-dialog" class="dialog">
+    <form method="dialog" class="stack" id="run-form">
+      <h2>生成场控码</h2>
+      <p class="muted">场控码只显示一次，默认 30 分钟有效。DM 输入后先兑换，点“开始场控”才会计时。</p>
+      <label for="run-dm">DM（可留空为临时 DM）</label>
+      <select id="run-dm" name="dm_id">
+        <option value="">临时 DM</option>
+        {% for dm in data.dms %}
+        <option value="{{ dm.dm_id }}">{{ dm.name }}</option>
+        {% endfor %}
+      </select>
+      <label for="run-mode">模式</label>
+      <select id="run-mode" name="mode">
+        <option value="software">纯软件：只推送提示</option>
+        <option value="hardware" {% if not hardware_configured %}disabled{% endif %}>
+          硬件增值：切阶段调用灯光/音效{% if not hardware_configured %}（未配置）{% endif %}
+        </option>
+      </select>
+      <div class="inline-actions">
+        <button type="button" class="secondary" id="run-cancel">取消</button>
+        <button type="button" class="primary" id="run-create">生成</button>
+      </div>
+      <div id="run-code-result" class="notice hidden" role="status" aria-live="polite"></div>
+    </form>
+  </dialog>
+
+  <p class="fine-print">
+    排期只写房间/DM 分配，不会自动修改开场时间、合并或取消场次。收益估值为内部参考，不是承诺收入。
+  </p>
+</main>
+{% endblock %}

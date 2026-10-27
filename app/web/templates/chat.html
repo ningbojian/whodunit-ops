@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}对话{% endblock %}
+{% block page %}chat{% endblock %}
+{% block body %}
+<div id="chat-page"
+     data-max-input-chars="{{ max_input_chars }}"
+     data-access-expires="{{ access_expires_at }}"
+     data-remaining-seconds="{{ remaining_seconds }}"
+     data-default-store="{{ default_store }}">
+
+  {% include "partials/nav.html" %}
+
+  <main class="chat-layout">
+    <aside class="sidebar" aria-label="快捷操作与数据快照">
+      <button id="reset-button" type="button" class="secondary full">新会话</button>
+
+      <section class="side-section">
+        <h2>快捷提问</h2>
+        <div class="quick-list">
+          <button type="button" class="quick" data-prompt="帮我诊断一下未来 7 天可能跳车的场次，按风险从高到低排。">风险诊断</button>
+          <button type="button" class="quick" data-prompt="帮我录入一条预约：剧本名、场次时间、客人和人数，我来补充细节。">预约录入</button>
+          <button type="button" class="quick" data-prompt="基于目前还有空位的场次，写 3 条适合发朋友圈的拼场文案，不要暴露内部财务数据。">文案生成</button>
+          <button type="button" class="quick" data-prompt="给我一个周末场次的定价和优惠建议，并说明依据。">定价建议</button>
+          <button type="button" class="quick" data-prompt="NL 是哪个本？先查本地剧本库；查不到就给我候选并说明是猜测，确认后不要直接建档。">剧本别名</button>
+        </div>
+      </section>
+
+      <section class="side-section">
+        <h2>我的场次</h2>
+        <div id="session-list" class="session-list">
+          {% if sessions %}
+            {% for item in sessions %}
+            <article class="session-card">
+              <div class="session-title">{{ item.script_name }}</div>
+              <div class="muted">{{ item.start_time }}</div>
+              <div class="session-meta">
+                <span>{{ item.script_type or '未分类' }}</span>
+                <span>已约 {{ item.booked_seats or 0 }} / {{ item.total_seats or 0 }}</span>
+                <span>剩 {{ item.remaining_seats or 0 }}</span>
+              </div>
+            </article>
+            {% endfor %}
+          {% else %}
+            <p class="muted empty-hint">暂无未来场次。你可以在对话里让助手录入。</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <p class="disclaimer">
+        本工具不会自动发微信、不处理支付或订单履约。所有写入只影响你的个人数据副本。
+      </p>
+    </aside>
+
+    <section class="chat-panel" aria-label="对话区">
+      <div id="message-list" class="messages" aria-live="polite">
+        <article class="message assistant">
+          <div class="bubble">
+            <p>你好，我是门店运营助手。可以帮你查剧本、拼场、查预约、看风险和写文案。</p>
+            <p>直接说你要处理的事情，或者点左侧快捷提问。剧本只说缩写也没关系。</p>
+          </div>
+        </article>
+      </div>
+
+      <p id="chat-status" class="chat-status" role="status" aria-live="polite"></p>
+
+      <form id="chat-form" class="composer">
+        <label class="sr-only" for="message-input">输入消息</label>
+        <textarea id="message-input" name="message" rows="3"
+                  maxlength="{{ max_input_chars }}"
+                  placeholder="例如：帮我看看周六晚上哪场最可能跳车"></textarea>
+        <div class="composer-row">
+          <span id="char-count" class="muted">0 / {{ max_input_chars }}</span>
+          <button id="send-button" type="submit" class="primary">发送</button>
+        </div>
+        <p class="muted keyboard-hint">Enter 发送，Shift + Enter 换行。</p>
+      </form>
+    </section>
+  </main>
+</div>
+{% endblock %}

@@ -1,0 +1,40 @@
+# 密钥，绝不入库
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+
+# 本地数据与运行产物（公共库采集结果、sqlite、临时文件都留本地）
+data/*
+!data/public_scripts_seed.csv
+
+# 备份与日志
+backups/
+*.log
+
+# 编辑器（.vscode/settings.json 含项目相关配置，保留入库）
+.idea/
+.neon
+node_modules/
+
+# Flutter / Dart（保留 pubspec.lock 以便复现）
+mobile_app/.dart_tool/
+mobile_app/build/
+mobile_app/android/.gradle/
+mobile_app/android/build/
+mobile_app/android/app/build/
+mobile_app/android/local.properties
+mobile_app/ios/Pods/
+mobile_app/ios/.symlinks/
+mobile_app/.flutter-plugins
+mobile_app/.flutter-plugins-dependencies
+*.apk
+*.ipa
+*.iml
+
+# 本机 Agent 技能脚手架（与产品无关）
+.agents/
+skills-lock.json

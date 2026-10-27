@@ -1,0 +1,35 @@
+# 剧本杀拼场智能运营 Agent — 依赖清单
+# 安装：python -m pip install -r requirements.txt
+
+# --- Agent 框架（1.x 新 API：create_agent + checkpointer）---
+langchain==1.4.6
+langchain-deepseek==1.1.1
+langgraph==1.2.15
+
+# --- 数据存储（Excel 用于 CLI/导入导出；SQLite/Neon Postgres 用于 Web）---
+pandas==2.3.3
+openpyxl==3.1.5
+SQLAlchemy==2.0.43
+psycopg[binary]==3.3.6
+
+# --- 配置 ---
+python-dotenv==1.2.4
+
+# --- Web 版（FastAPI + 原生前端 + Resend 审批邮件）---
+fastapi==0.146.0
+uvicorn==0.54.0
+jinja2==3.1.6
+python-multipart==0.0.32
+itsdangerous==2.2.0
+httpx==0.28.1
+
+# --- 测试（全部离线，不需要 API key）---
+pytest==8.4.2
+
+# --- HTTP 解压（必须显式安装，原因见下方注释）---
+# openai SDK 走 httpx2，DeepSeek 返回 Content-Encoding: br。
+# httpx2 优先用 Google 的 brotli（C 绑定），缺失时回退到 brotlicffi；
+# 而环境中已装的 brotlicffi 1.1.0.0 不支持 httpx2 所需的新参数
+# output_buffer_limit，会抛 TypeError 并被包装成误导性的连接错误。
+# 装上 brotli 后 httpx2 走正选分支，问题消失。
+brotli==1.2.0

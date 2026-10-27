@@ -1,0 +1,16 @@
+{
+    // 关键：显式指向 conda base。
+    // 不设这个，Pylance 解析不到 langchain / langgraph，
+    // 编辑器里会报一堆"无法解析导入"，但脚本其实能正常跑。
+    "python.defaultInterpreterPath": "C:\\Users\\Lenovo\\anaconda3\\python.exe",
+
+    // 让终端自动加载 .env（DEEPSEEK_API_KEY 在终端里即可用）
+    "python.terminal.useEnvFile": true,
+    "python.terminal.activateEnvironment": true,
+
+    // 让 Pylance 能解析 `from app.config import ...`
+    "python.analysis.extraPaths": ["${workspaceFolder}"],
+
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda"
+}

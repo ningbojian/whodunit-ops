@@ -1,0 +1,284 @@
+{% extends "base.html" %}
+{% block title %}资源{% endblock %}
+{% block page %}resources{% endblock %}
+{% block body %}
+{% include "partials/nav.html" %}
+<main class="page-shell" data-resources-page data-as-of="{{ data.as_of }}">
+  <section class="page-head">
+    <div>
+      <p class="eyebrow">门店资源</p>
+      <h1>房间、DM 与班次</h1>
+      <p class="muted">资源是自动排期的前提。缺容量、技能或班次时系统仍可运行，但会给出提示，不会凭空猜测。</p>
+    </div>
+    <div class="page-actions">
+      <button type="button" class="secondary" id="seed-demo-button">载入演示资源</button>
+    </div>
+  </section>
+
+  <section class="stat-grid">
+    <article class="stat-tile"><span class="stat-label">房间</span><strong>{{ data.counts.rooms }}</strong></article>
+    <article class="stat-tile"><span class="stat-label">DM</span><strong>{{ data.counts.dms }}</strong></article>
+    <article class="stat-tile"><span class="stat-label">剧本</span><strong>{{ data.counts.scripts }}</strong></article>
+    <article class="stat-tile"><span class="stat-label">场次</span><strong>{{ data.counts.sessions }}</strong></article>
+  </section>
+
+  <section class="panel">
+    <h2>缺口清单</h2>
+    {% if data.setup["items"] %}
+    <ul class="checklist">
+      {% for item in data.setup["items"] %}
+      <li class="checklist-item warn"><span class="status-dot"></span><span>{{ item.message }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-state">资源已齐，可开始排期。</p>
+    {% endif %}
+  </section>
+
+  <div class="two-column">
+    <section class="panel">
+      <h2>房间</h2>
+      <div class="card-list">
+        {% for room in data.rooms %}
+        <article class="resource-card">
+          <div class="resource-head">
+            <strong>{{ room.name }}</strong>
+            <span class="chip">{{ '启用' if room.active else '停用' }}</span>
+          </div>
+          <p class="muted">
+            容量 {{ room.capacity or '未填' }} · 缓冲 {{ room.buffer_minutes }} 分钟
+            {% if room.tags %} · {{ room.tags }}{% endif %}
+          </p>
+          <button type="button" class="secondary small"
+                  data-edit-room="{{ room.room_id }}"
+                  data-name="{{ room.name }}"
+                  data-capacity="{{ room.capacity or '' }}"
+                  data-buffer="{{ room.buffer_minutes }}"
+                  data-tags="{{ room.tags or '' }}"
+                  data-cost="{{ room.hourly_cost if room.hourly_cost is not none else '' }}"
+                  data-active="{{ 'true' if room.active else 'false' }}"
+                  data-notes="{{ room.notes or '' }}">编辑</button>
+        </article>
+        {% else %}
+        <p class="empty-state">还没有房间。手工添加、导入 CSV 或载入演示资源。</p>
+        {% endfor %}
+      </div>
+
+      <h3>新增 / 更新房间</h3>
+      <form id="room-form" class="stack" data-resource-form="room">
+        <input type="hidden" name="room_id" id="room-id">
+        <label for="room-name">房间名</label>
+        <input id="room-name" name="name" type="text" maxlength="60" required>
+        <div class="field-row">
+          <div>
+            <label for="room-capacity">容量</label>
+            <input id="room-capacity" name="capacity" type="number" min="1" max="60">
+          </div>
+          <div>
+            <label for="room-buffer">翻台缓冲（分钟）</label>
+            <input id="room-buffer" name="buffer_minutes" type="number" min="0" max="120" value="15">
+          </div>
+        </div>
+        <label for="room-tags">标签</label>
+        <input id="room-tags" name="tags" type="text" maxlength="120" placeholder="推理/大房">
+        <div class="field-row">
+          <div>
+            <label for="room-cost">每小时成本</label>
+            <input id="room-cost" name="hourly_cost" type="number" min="0" step="0.01">
+          </div>
+          <div class="checkbox-row">
+            <input id="room-active" name="active" type="checkbox" checked>
+            <label for="room-active">启用</label>
+          </div>
+        </div>
+        <label for="room-notes">备注</label>
+        <textarea id="room-notes" name="notes" rows="2" maxlength="500"></textarea>
+        <button type="submit" class="primary">保存房间</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>DM</h2>
+      <div class="card-list">
+        {% for dm in data.dms %}
+        <article class="resource-card">
+          <div class="resource-head">
+            <strong>{{ dm.name }}</strong>
+            <span class="chip">{{ '启用' if dm.active else '停用' }}</span>
+          </div>
+          <p class="muted">
+            技能 {{ dm.skills or '未配置' }} · 每日上限 {{ dm.max_sessions_per_day or '不限' }}
+          </p>
+          <p class="muted">班次 {{ dm.shifts|length }} 段 · 带过 {{ dm.past_runs or 0 }} 场 / {{ dm.distinct_scripts or 0 }} 个本</p>
+          <div class="leave-row" data-dm-leaves="{{ dm.dm_id }}">
+            {% for leave in dm.leaves %}
+            <span class="chip warn" data-leave-id="{{ leave.leave_id }}">
+              {{ leave.day }}{% if leave.note %} · {{ leave.note }}{% endif %}
+              <button type="button" class="leave-remove"
+                      data-remove-leave="{{ leave.leave_id }}"
+                      aria-label="删除请假">×</button>
+            </span>
+            {% endfor %}
+          </div>
+          <div class="inline-actions">
+            <button type="button" class="secondary small"
+                    data-edit-dm="{{ dm.dm_id }}"
+                    data-name="{{ dm.name }}"
+                    data-skills="{{ dm.skills or '' }}"
+                    data-cost="{{ dm.hourly_cost if dm.hourly_cost is not none else '' }}"
+                    data-limit="{{ dm.max_sessions_per_day or '' }}"
+                    data-active="{{ 'true' if dm.active else 'false' }}"
+                    data-notes="{{ dm.notes or '' }}">编辑</button>
+            <button type="button" class="secondary small"
+                    data-add-leave="{{ dm.dm_id }}" data-dm-name="{{ dm.name }}">请假</button>
+          </div>
+          <details class="more-fields">
+            <summary>带本记录</summary>
+            {% if dm.recent_scripts %}
+            <ul class="plain-list">
+              {% for item in dm.recent_scripts %}
+              <li>{{ item.script_name }} · {{ item.start_time or '时间未知' }}</li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="muted">还没有带本记录（已取消场次不计）。</p>
+            {% endif %}
+          </details>
+        </article>
+        {% else %}
+        <p class="empty-state">还没有 DM。手工添加、导入 CSV 或载入演示资源。</p>
+        {% endfor %}
+      </div>
+
+      <h3>新增 / 更新 DM</h3>
+      <form id="dm-form" class="stack" data-resource-form="dm">
+        <input type="hidden" name="dm_id" id="dm-id">
+        <label for="dm-name">DM 名</label>
+        <input id="dm-name" name="name" type="text" maxlength="40" required>
+        <label for="dm-skills">技能</label>
+        <input id="dm-skills" name="skills" type="text" maxlength="120" placeholder="推理/情感/机制">
+        <div class="field-row">
+          <div>
+            <label for="dm-cost">每小时成本</label>
+            <input id="dm-cost" name="hourly_cost" type="number" min="0" step="0.01">
+          </div>
+          <div>
+            <label for="dm-limit">每日最多场次</label>
+            <input id="dm-limit" name="max_sessions_per_day" type="number" min="1" max="20">
+          </div>
+        </div>
+        <div class="checkbox-row">
+          <input id="dm-active" name="active" type="checkbox" checked>
+          <label for="dm-active">启用</label>
+        </div>
+        <label for="dm-notes">备注</label>
+        <textarea id="dm-notes" name="notes" rows="2" maxlength="500"></textarea>
+        <button type="submit" class="primary">保存 DM</button>
+      </form>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>CSV 导入</h2>
+    <p class="muted">表头为中文；旧英文表头仍可导入；CSV 可直接用 Excel 打开编辑。缺列可空，未知列忽略；手机号等个人信息不需要填写。</p>
+    <div class="template-links">
+      <a class="button-link secondary small" href="/resources/template/rooms.csv">房间模板</a>
+      <a class="button-link secondary small" href="/resources/template/dms.csv">DM 模板</a>
+      <a class="button-link secondary small" href="/resources/template/shifts.csv">班次模板</a>
+    </div>
+    <form id="resource-import-form" class="stack" data-import-form>
+      <label for="resource-kind">资源类型</label>
+      <select id="resource-kind" name="kind" required>
+        <option value="rooms">房间</option>
+        <option value="dms">DM</option>
+        <option value="shifts">班次</option>
+      </select>
+      <label for="resource-file">CSV 文件</label>
+      <input id="resource-file" name="file" type="file" accept=".csv,text/csv" required>
+      <button type="submit" class="secondary">预览并导入</button>
+    </form>
+    <p id="resource-import-status" class="chat-status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="panel" data-scripts-panel>
+    <div class="panel-head">
+      <h2>剧本库</h2>
+      <span class="muted" id="scripts-count">
+        共 {{ data.scripts_page.total }} 部 · 第 {{ data.scripts_page.page }} / {{ data.scripts_page.pages }} 页
+      </span>
+    </div>
+    <div class="filter-row" data-scripts-filter>
+      <div>
+        <label for="filter-q">搜索</label>
+        <input id="filter-q" type="search" data-filter="q"
+               placeholder="剧本名 / 别名" autocomplete="off">
+      </div>
+      <div>
+        <label for="filter-type">类型</label>
+        <select id="filter-type" data-filter="type">
+          <option value="">全部</option>
+          {% for kind in ["推理", "情感", "恐怖", "欢乐", "机制", "阵营", "开放"] %}
+          <option value="{{ kind }}">{{ kind }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="filter-seats-min">人数下限</label>
+        <input id="filter-seats-min" type="number" min="1" max="40"
+               data-filter="seats_min">
+      </div>
+      <div>
+        <label for="filter-seats-max">人数上限</label>
+        <input id="filter-seats-max" type="number" min="1" max="40"
+               data-filter="seats_max">
+      </div>
+      <div>
+        <label for="filter-duration-min">时长下限（分钟）</label>
+        <input id="filter-duration-min" type="number" min="30" step="15"
+               data-filter="duration_min">
+      </div>
+      <div>
+        <label for="filter-duration-max">时长上限（分钟）</label>
+        <input id="filter-duration-max" type="number" min="30" step="15"
+               data-filter="duration_max">
+      </div>
+      <div>
+        <label for="filter-source">来源</label>
+        <select id="filter-source" data-filter="source">
+          <option value="">全部</option>
+          <option value="私有">私有</option>
+          <option value="公共库">公共库</option>
+        </select>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>剧本</th><th>类型</th><th>人数</th><th>时长</th><th>原价</th><th>来源</th></tr></thead>
+        <tbody id="scripts-tbody">
+          {% for script in data.scripts_page["items"] %}
+          <tr>
+            <td>{{ script.script_name }}</td>
+            <td>{{ script.script_type or '未分类' }}</td>
+            <td>{{ script.total_seats or '—' }}</td>
+            <td>{{ script.duration_minutes or '缺省 240' }}</td>
+            <td>{{ script.list_price or '—' }}</td>
+            <td><span class="chip {{ 'warn' if script.source == '公共库' else 'ok' }}">{{ script.source }}</span></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="empty-state">剧本库为空。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="inline-actions">
+      <button type="button" class="secondary small" id="scripts-prev"
+              {% if data.scripts_page.page <= 1 %}disabled{% endif %}>上一页</button>
+      <button type="button" class="secondary small" id="scripts-next"
+              {% if data.scripts_page.page >= data.scripts_page.pages %}disabled{% endif %}>下一页</button>
+    </div>
+    <p class="fine-print">剧本库由对话里的剧本工具维护；这里只读展示。私有商家不可编辑公共库条目。</p>
+  </section>
+
+  <p class="fine-print">数据截止 {{ data.as_of }}。所有时间均为门店本地时间。</p>
+</main>
+{% endblock %}

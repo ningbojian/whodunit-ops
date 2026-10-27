@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}场控直播{% endblock %}
+{% block page %}run-detail{% endblock %}
+{% block body %}
+{% include "partials/nav.html" %}
+<main class="page-shell" data-run-detail data-run-id="{{ view.run.run_id }}"
+      data-state-version="{{ view.run.state_version }}" data-server-now="{{ view.server_now }}">
+  <section class="page-head">
+    <div>
+      <p class="eyebrow">只读直播</p>
+      <h1>{{ view.session.script_name if view.session else '场次已删除' }}</h1>
+      <p class="muted">
+        {{ view.run.room_name or '房间未定' }} · {{ view.run.dm_name or '临时 DM' }} ·
+        状态 <strong>{{ view.run.status }}</strong> ·
+        模式 {{ '硬件增值' if view.run.mode == 'hardware' else '纯软件' }}
+      </p>
+    </div>
+    <div class="page-actions">
+      <button type="button" class="secondary" id="regen-code-button">重新生成场控码</button>
+      <button type="button" class="danger" id="revoke-token-button">撤销 DM 令牌</button>
+    </div>
+  </section>
+
+  <section class="panel run-board">
+    <div class="run-timer" id="run-timer" data-status="{{ view.run.status }}"
+         data-remaining="{{ view.run.remaining_seconds if view.run.remaining_seconds is not none else '' }}"
+         data-overtime="{{ view.run.overtime_seconds or 0 }}">--:--:--</div>
+    <p class="run-state-text" id="run-state-text">
+      {% if view.run.paused %}已暂停{% elif view.run.overtime_seconds %}已超时{% elif view.run.status == 'active' %}进行中{% else %}{{ view.run.status }}{% endif %}
+    </p>
+    <p class="muted" id="run-stage-summary">
+      当前阶段 {{ view.run.current_seq or '—' }} / {{ view.stages|length }}
+      {% if view.current_stage %} · {{ view.current_stage.name }}{% endif %}
+      · 暂停累计 {{ view.run.paused_total_seconds }} 秒
+    </p>
+    {% if view.run.hardware_degraded %}
+    <p class="notice warn">硬件已降级为文字提示；阶段流转未受影响。</p>
+    {% endif %}
+    {% for warning in view.warnings %}
+    <p class="notice warn">{{ warning }}</p>
+    {% endfor %}
+  </section>
+
+  <section class="panel">
+    <h2>阶段快照</h2>
+    <ol class="stage-timeline">
+      {% for stage in view.stages %}
+      <li class="stage-item {{ stage.state }}">
+        <span class="stage-index mono">{{ stage.seq }}</span>
+        <span>{{ stage.name }}</span>
+        <span class="muted">{{ stage.duration_minutes }} 分钟 · {{ stage.state }}</span>
+      </li>
+      {% else %}
+      <li class="empty-state">还没有阶段快照。</li>
+      {% endfor %}
+    </ol>
+  </section>
+
+  <section class="panel">
+    <h2>最近事件</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>时间（UTC）</th><th>事件</th><th>阶段</th><th>操作者</th></tr></thead>
+        <tbody>
+          {% for event in view.events %}
+          <tr>
+            <td class="mono">{{ event.at }}</td>
+            <td>{{ event.event_type }}</td>
+            <td>{{ event.stage_seq or '—' }}</td>
+            <td>{{ event.actor }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="empty-state">还没有事件。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div id="run-code-panel" class="panel hidden" role="status" aria-live="polite">
+    <h2>新的场控码</h2>
+    <p class="muted">只显示这一次。旧令牌已失效，当前阶段和计时保留。</p>
+    <div class="copy-row">
+      <input id="run-code-value" type="text" readonly aria-label="场控码">
+      <button type="button" class="secondary" data-copy-target="run-code-value">复制</button>
+    </div>
+  </div>
+
+  <p class="fine-print">
+    商家端没有推进按钮。DM 的每一次阶段操作都会写入追加式事件日志，便于复盘。
+  </p>
+</main>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}等待审批{% endblock %}
+{% block page %}pending{% endblock %}
+{% block body %}
+<main class="auth-shell">
+  <section class="card auth-card" id="pending-page"
+           data-status="{{ status }}"
+           data-status-url="/api/access/status"
+           data-claim-url="/api/access/claim">
+    <p class="eyebrow">申请已提交</p>
+    <h1>等待开发者批准</h1>
+    <p class="lede">审批通过后，这个页面会自动进入聊天界面。请不要关闭页面。</p>
+
+    {% if console_email %}
+    <p class="notice" role="status">
+      本地控制台邮件模式：<strong>没有发送真实邮件</strong>。
+      请到运行 <span class="mono">python -m app.web.main</span> 的终端，
+      搜索 <span class="mono">[本地邮件]</span> 或 <span class="mono">/approve/</span>，
+      打开其中的审批链接。审批邮件的收件人是 <span class="mono">OWNER_EMAIL</span>，
+      不会发到申请者邮箱。
+    </p>
+    {% endif %}
+
+    <dl class="facts">
+      <div>
+        <dt>邮箱</dt>
+        <dd>{{ email_masked }}</dd>
+      </div>
+      <div>
+        <dt>称呼</dt>
+        <dd>{{ record.display_name }}</dd>
+      </div>
+      <div>
+        <dt>申请编号</dt>
+        <dd class="mono">{{ record.id }}</dd>
+      </div>
+      <div>
+        <dt>申请时间（UTC+8）</dt>
+        <dd>{{ created_at }}</dd>
+      </div>
+    </dl>
+
+    <p id="pending-status" class="status-box" role="status" aria-live="polite">
+      当前状态：等待审批
+    </p>
+    <p id="pending-hint" class="muted">
+      审批链接将在 {{ approval_expires_at }} 前有效。若开发者拒绝或链接过期，可以重新申请。
+    </p>
+
+    <a id="pending-retry" class="primary button-link hidden" href="/login">重新申请</a>
+
+    <div class="fine-print">
+      <p>关闭页面后，只要浏览器会话还在，可以重新打开本页查看状态；也可以请开发者转发审批页上的备用链接。</p>
+      <p>本页面只轮询你自己的申请状态，不会展示其他用户的数据。</p>
+    </div>
+  </section>
+</main>
+{% endblock %}

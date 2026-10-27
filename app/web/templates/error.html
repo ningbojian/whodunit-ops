@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block page %}error{% endblock %}
+{% block body %}
+<main class="auth-shell">
+  <section class="card auth-card">
+    <p class="eyebrow">提示</p>
+    <h1>{{ title }}</h1>
+    <p class="lede">{{ message }}</p>
+    <a class="primary button-link" href="/login">返回申请页</a>
+  </section>
+</main>
+{% endblock %}

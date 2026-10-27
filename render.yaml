@@ -1,0 +1,56 @@
+services:
+  - type: web
+    name: jbs-agent-web
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: singapore
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: WEB_ENV
+        value: production
+      - key: EMAIL_BACKEND
+        value: resend
+      - key: EMAIL_FROM
+        value: onboarding@resend.dev
+      - key: WEB_DEFAULT_STORE
+        value: 迷雾剧场
+      - key: WEB_SESSION_SECRET
+        generateValue: true
+      - key: OWNER_EMAIL
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      # 业务数据、审批与每日用量都在 Neon Postgres。
+      # DATABASE_URL 是 Secret，不要在仓库里填值；Render 控制台粘贴连接串。
+      - key: WEB_STORAGE_BACKEND
+        value: database
+      - key: DATABASE_URL
+        sync: false
+      # 场控与导入的非敏感默认值；硬件地址和 token 未填时硬件模式不可用。
+      - key: WEB_MAX_IMPORT_BYTES
+        value: "2097152"
+      - key: DM_CODE_TTL_MINUTES
+        value: "30"
+      - key: DM_TOKEN_HOURS
+        value: "12"
+      - key: HARDWARE_TIMEOUT_SECONDS
+        value: "2"
+      - key: HARDWARE_SKILL_URL
+        sync: false
+      - key: HARDWARE_SKILL_TOKEN
+        sync: false
+      # 联网搜索（web_search 工具）：默认 Tavily；key 未填时工具返回
+      # not_configured，不产生费用。默认日配额（10/商家、30/全站）低于免费档。
+      - key: WEB_SEARCH_PROVIDER
+        value: tavily
+      - key: WEB_SEARCH_API_KEY
+        sync: false
+      # 免费层磁盘是临时的；数据库模式不依赖本地磁盘。
+      # Excel 仅用于 CLI、导入和导出，容器重启不会影响数据库里的数据。

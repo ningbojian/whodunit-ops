@@ -1,0 +1,32 @@
+<header class="topbar">
+  <a class="brand" href="/">
+    <span class="brand-mark">幕</span>
+    <span class="brand-text">
+      <strong>{{ product_name }}</strong>
+      <span class="muted">{{ access.display_name }} · {{ email_masked }}</span>
+    </span>
+  </a>
+  <nav class="topnav" aria-label="主导航">
+    <a href="/" {% if active_page == 'chat' %}aria-current="page"{% endif %}>对话</a>
+    <a href="/schedule" {% if active_page == 'schedule' %}aria-current="page"{% endif %}>排期</a>
+    <a href="/imports" {% if active_page == 'imports' %}aria-current="page"{% endif %}>渠道单</a>
+    <a href="/resources" {% if active_page == 'resources' %}aria-current="page"{% endif %}>资源</a>
+    <a href="/stages" {% if active_page == 'stages' %}aria-current="page"{% endif %}>阶段</a>
+    <a href="/runs" {% if active_page == 'runs' %}aria-current="page"{% endif %}>场控</a>
+  </nav>
+  <div class="topbar-actions">
+    <span class="countdown" title="访问到期后需要重新申请">
+      剩余 <span id="access-countdown" class="mono">{{ remaining_text }}</span>
+    </span>
+    <button id="logout-button" type="button" class="secondary small">退出</button>
+  </div>
+</header>
+
+<nav class="mobile-nav" aria-label="底部导航">
+  <a href="/" {% if active_page == 'chat' %}aria-current="page"{% endif %}><span>对话</span></a>
+  <a href="/schedule" {% if active_page == 'schedule' %}aria-current="page"{% endif %}><span>排期</span></a>
+  <a href="/imports" {% if active_page == 'imports' %}aria-current="page"{% endif %}><span>渠道单</span></a>
+  <a href="/resources" {% if active_page == 'resources' %}aria-current="page"{% endif %}><span>资源</span></a>
+  <a href="/stages" {% if active_page == 'stages' %}aria-current="page"{% endif %}><span>阶段</span></a>
+  <a href="/runs" {% if active_page == 'runs' %}aria-current="page"{% endif %}><span>场控</span></a>
+</nav>
