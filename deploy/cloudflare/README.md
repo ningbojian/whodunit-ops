@@ -39,34 +39,43 @@ Cloudflare 边缘建立出站隧道，公网请求经 Cloudflare 转发进来。
 
 **前提：域名的 NS 已经切到 Cloudflare，且控制台显示 Active**，否则 `route dns` 建不了记录。
 
-在**有浏览器的电脑**上做（登录流程要开浏览器，ECS 上没有）：
+`tunnel login` 只是打印一个 URL，你在**任意一台有浏览器的电脑**上打开它完成授权即可，证书由
+正在运行的那个进程自己下载。所以 `cloudflared` 不必装到本机，直接在 ECS 上跑就行。在
+`deploy/cloudflare/` 目录里执行：
 
 ```bash
-cloudflared tunnel login                    # 浏览器里选 ghtrending.cyou 授权
-cloudflared tunnel create whodunit-ops      # 记下输出的 UUID
-cloudflared tunnel route dns whodunit-ops demo.ghtrending.cyou
+mkdir -p cloudflared
+
+# 镜像默认以 nonroot 运行，HOME 指向容器内的 /home/nonroot。
+# 不覆盖成 /root 的话，凭据会写进容器里，容器一删就没了。
+CFRUN='docker run --rm -it --user root -e HOME=/root'
+CFRUN="$CFRUN -v $PWD/cloudflared:/root/.cloudflared cloudflare/cloudflared:latest"
+
+$CFRUN tunnel login                    # 把打印的 URL 复制到浏览器，选中 ghtrending.cyou 授权
+$CFRUN tunnel create whodunit-ops      # 记下输出的 UUID
+$CFRUN tunnel route dns whodunit-ops demo.ghtrending.cyou
 ```
 
-生成的 `<UUID>.json` 在 `~/.cloudflared/`（Windows 是 `C:\Users\<你>\.cloudflared\`）。
-
-回到 ECS：
+这一步会在 `cloudflared/` 里留下两个凭据文件：`cert.pem`（账户级 API 证书）和
+`<UUID>.json`（隧道密钥）。两者都不能入库，`.gitignore` 已把该目录整体排除、只放行模板。
 
 ```bash
-mkdir -p deploy/cloudflare/cloudflared
-# 把 <UUID>.json 传进来：阿里云 Workbench 的文件上传，或 scp
-cp deploy/cloudflare/cloudflared/config.yml.example deploy/cloudflare/cloudflared/config.yml
-# 编辑 config.yml，把 <UUID> 换成真实值
+cp ../vps/.env .                       # 或直接新建；同级的 .env 里不要再写 TUNNEL_TOKEN
+cp cloudflared/config.yml.example cloudflared/config.yml
+# 编辑 config.yml，把两处 <UUID> 换成 create 输出的值
 docker compose -f docker-compose.local.yml up -d --build
+docker compose -f docker-compose.local.yml logs -f cloudflared
 ```
 
-`<UUID>.json` 等价于隧道密码，`.gitignore` 已排除该目录下的 `*.json` 和 `config.yml`。
+**每条 `docker compose` 子命令都要带 `-f docker-compose.local.yml`。** 不带会退回同目录的
+`docker-compose.yml`——那是远程管理模式，会报 `TUNNEL_TOKEN is missing a value`。
 
 两种模式下源站都写 `web:8000` 而不是 `127.0.0.1:8000`：`cloudflared` 和 `web` 在同一个
 compose 网络里，`web` 是服务名，由 Docker 内置 DNS 解析。宿主机上没有任何进程监听 8000。
 
 ### 验证（两种模式相同）
 
-`docker compose logs cloudflared` 应出现 4 条 `Registered tunnel connection`；
+`docker compose -f <对应文件> logs cloudflared` 应出现 4 条 `Registered tunnel connection`；
 `curl https://demo.ghtrending.cyou/healthz` 的 `db`、`schema`、`model` 三项都应为 `true`。
 
 `.env` 已在仓库根 `.gitignore` 中排除，任何层级的 `.env` 都不会入库；`TUNNEL_TOKEN` 也不要

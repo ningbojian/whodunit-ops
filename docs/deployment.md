@@ -28,18 +28,25 @@
 
 1. **把域名接入 Cloudflare。** 控制台 Add a site → `ghtrending.cyou` → 免费计划，让它自动扫描导入现有记录，**逐条核对后再改 NS**。至少要保留 apex 的 A 记录（当前指向 Vercel）和任何 `_vercel` 之类的 TXT 验证记录。
 2. **在注册商处改 NS** 为 Cloudflare 给的两个地址，用 `nslookup -type=NS ghtrending.cyou` 确认生效。
-3. **建 Tunnel。** Zero Trust → Networks → Tunnels → Create a tunnel → 选 **Cloudflared** → 命名 `whodunit-ops` → 复制 token。再加一条 Public Hostname：`demo` + `ghtrending.cyou`，源站 `HTTP` → `web:8000`（`web` 是 compose 服务名，`cloudflared` 在同一个 Docker 网络里能解析它）。这层配置只存在于控制台，重建隧道会丢，变更请同步 `deploy/cloudflare/README.md`。
+3. **建 Tunnel。** 两种方式二选一，细节见 [deploy/cloudflare/README.md](../deploy/cloudflare/README.md)：
+
+   - **远程管理**：配置放在控制台。Zero Trust → Networks → Tunnels → Create a tunnel → 选 **Cloudflared** → 命名 `whodunit-ops` → 复制 token；再加一条 Public Hostname：`demo` + `ghtrending.cyou`，源站 `HTTP` → `web:8000`（`web` 是 compose 服务名，`cloudflared` 在同一个 Docker 网络里能解析它）。这层配置只存在于控制台，重建隧道会丢，变更请同步 README。
+   - **本地管理**：配置放在仓库。在 ECS 上用一次性容器跑 `cloudflared tunnel login / create / route dns`，全程不经过 Zero Trust。**创建 Zero Trust 组织要求绑定支付方式**（免费版不扣费，但没有可用的卡就过不去），遇到这一步时走这条；代价是 `cert.pem` 与 `<UUID>.json` 两份凭据得自己保管。
+
 4. **在 ECS 上部署**：
 
    ```bash
    git clone https://github.com/ningbojian/whodunit-ops.git
    cd whodunit-ops/deploy/cloudflare
-   # 写好 .env（比 Caddy 版多一行 TUNNEL_TOKEN）
-   docker compose up -d --build
+   # 写好 .env
+   docker compose up -d --build                              # 远程管理
+   docker compose -f docker-compose.local.yml up -d --build  # 本地管理
    docker compose logs -f cloudflared   # 应出现 4 条 Registered tunnel connection
    ```
 
-   `.env` 的变量与 Render 一节相同，另加 `TUNNEL_TOKEN`：`WEB_ENV=production`、`EMAIL_BACKEND=resend`、`EMAIL_FROM=onboarding@resend.dev`、`WEB_STORAGE_BACKEND=database`、`OWNER_EMAIL`、`PUBLIC_BASE_URL=https://demo.ghtrending.cyou`、`DEEPSEEK_API_KEY`、`RESEND_API_KEY`、`WEB_SESSION_SECRET`、`DATABASE_URL`（Neon **池化**串）。`.env` 已在根 `.gitignore` 排除，任何层级都不会入库。
+   本地管理模式下**每个 `docker compose` 子命令都要带 `-f docker-compose.local.yml`**，否则会退回默认的远程管理文件并报 `TUNNEL_TOKEN is missing`。
+
+   `.env` 的变量与 Render 一节相同：`WEB_ENV=production`、`EMAIL_BACKEND=resend`、`EMAIL_FROM=onboarding@resend.dev`、`WEB_STORAGE_BACKEND=database`、`OWNER_EMAIL`、`PUBLIC_BASE_URL=https://demo.ghtrending.cyou`、`DEEPSEEK_API_KEY`、`RESEND_API_KEY`、`WEB_SESSION_SECRET`、`DATABASE_URL`（Neon **池化**串）。远程管理另加 `TUNNEL_TOKEN`，本地管理不需要。大陆机器构建时加 `PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`，否则 `pip install` 容易超时。`.env` 已在根 `.gitignore` 排除，任何层级都不会入库。
 5. 云厂商安全组**不需要**新增任何入站端口，只留 22。
 6. 访问 `https://demo.ghtrending.cyou/healthz`，`db`、`schema`、`model` 三项必须都是 `true`。
 
@@ -47,6 +54,7 @@
 
 ```bash
 cd whodunit-ops && git pull && cd deploy/cloudflare && docker compose up -d --build
+# 本地管理：docker compose -f docker-compose.local.yml up -d --build
 ```
 
 ### 说明
@@ -55,6 +63,7 @@ cd whodunit-ops && git pull && cd deploy/cloudflare && docker compose up -d --bu
 - 客户端 IP 由 Cloudflare 通过 `X-Forwarded-For` 传入，配合 `Dockerfile` 的 `--proxy-headers --forwarded-allow-ips='*'`，按 IP 的限流仍然有效。端口不发布，因此这条设置不会被外部伪造。
 - Cloudflare 免费版**不经中国大陆节点**，延迟约等于香港边缘；首访还要叠加 Neon 冷启动 1–2 秒。
 - 容器磁盘是临时的，业务数据在 Neon；重新部署只丢进程内的对话记忆。
+- **本地管理生成的凭据不能入库。** `cloudflared tunnel login` 写出 `cert.pem`（账户级 API 证书），`create` 写出 `<UUID>.json`（隧道密钥）；`.gitignore` 已把 `deploy/cloudflare/cloudflared/` 整体排除，只放行 `config.yml.example`。
 
 ## 备选：香港轻量 + Caddy
 

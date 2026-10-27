@@ -188,8 +188,10 @@ def test_gitignore_excludes_env_and_web_user_data():
     assert "!data/public_scripts_seed.csv" in text
     assert "backups/" in text
     assert re.search(r"^\*\.log$", text, re.MULTILINE)
-    # 隧道凭据等价于密码，本地管理模式生成的 json 不能入库。
-    assert "deploy/cloudflare/cloudflared/*.json" in text
+    # 隧道凭据等价于密码：<UUID>.json 是隧道密钥，cert.pem 是账户级 API 证书。
+    # 目录内只放行模板，避免以后 cloudflared 新增的凭据文件漏网。
+    assert "deploy/cloudflare/cloudflared/*" in text
+    assert "!deploy/cloudflare/cloudflared/config.yml.example" in text
     for entry in (
         "mobile_app/.dart_tool/",
         "mobile_app/build/",

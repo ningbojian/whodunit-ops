@@ -1,9 +1,11 @@
 # 密钥，绝不入库
 .env
 
-# Cloudflare 本地管理隧道的凭据（等价于隧道密码）
-deploy/cloudflare/cloudflared/*.json
-deploy/cloudflare/cloudflared/config.yml
+# Cloudflare 本地管理隧道的凭据：<UUID>.json 等价于隧道密码，
+# cert.pem 是账户级 API 证书，泄露后可以操作该账号下的隧道。
+# 只放行模板，目录内其他文件一律不入库。
+deploy/cloudflare/cloudflared/*
+!deploy/cloudflare/cloudflared/config.yml.example
 
 # Python
 __pycache__/
