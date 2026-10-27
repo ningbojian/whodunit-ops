@@ -19,6 +19,8 @@ RENDER = PROJECT_ROOT / "render.yaml"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
 GITIGNORE = PROJECT_ROOT / ".gitignore"
 REQUIREMENTS = PROJECT_ROOT / "requirements.txt"
+HF_SPACE_README = PROJECT_ROOT / "deploy" / "huggingface" / "README.md"
+HF_PUBLISH_SCRIPT = PROJECT_ROOT / "scripts" / "publish_hf_space.py"
 
 # 真实 DeepSeek / Resend key 的随机主体远长于测试里的演示串；
 # 阈值取 24，避免把 sk-demo123456 这类故意保留的脱敏样例误报。
@@ -33,7 +35,9 @@ def test_dockerfile_runs_single_non_root_worker():
     text = _read(DOCKERFILE)
 
     assert "FROM python:3.13-slim" in text
-    assert "useradd" in text and "USER app" in text
+    # Hugging Face Spaces 要求容器以 UID 1000 运行；同时保持非 root。
+    assert "useradd" in text and "--uid 1000" in text
+    assert "USER user" in text
     assert "--factory" in text
     assert "--workers 1" in text
     assert "--no-access-log" in text
@@ -202,7 +206,7 @@ def test_readme_documents_web_honestly():
     assert "EMAIL_BACKEND=resend" in text
     assert "onboarding@resend.dev" in text
     assert "每邮箱数据隔离" in text
-    assert "免费实例的磁盘是临时的" in text
+    assert "磁盘普遍是临时的" in text
     assert "1 个 Uvicorn worker" in text
     assert "本轮不做" in text
     # 数据库迁移的部署说明必须保留，避免 README 回退成纯 Excel 版本。
@@ -258,6 +262,27 @@ def test_readme_documents_new_operations_honestly():
     assert "未执行 `flutter build apk`" not in text
     assert "已构建 APK" not in text
     assert "已真机联调" not in text
+
+
+def test_huggingface_space_card_matches_dockerfile():
+    """Space 卡片的 SDK 与端口必须和 Dockerfile 对齐，否则 HF 连不上应用。"""
+    text = _read(HF_SPACE_README)
+
+    assert text.startswith("---\n")
+    assert "sdk: docker" in text
+    assert "app_port: 8000" in text
+    assert not SECRET_LIKE.search(text)
+
+
+def test_publish_script_only_ships_runtime_files():
+    """公开 Space 只能收到运行所需文件，不能把 data/、tests/、.env 推上去。"""
+    text = _read(HF_PUBLISH_SCRIPT)
+
+    assert 'COPY_DIRS = ("app",)' in text
+    assert 'COPY_FILES = ("requirements.txt", "Dockerfile")' in text
+    assert 'os.environ.get("HF_TOKEN"' in text
+    assert "SPACE_README" in text
+    assert not SECRET_LIKE.search(text)
 
 
 def test_repository_contains_no_live_secret_shapes():

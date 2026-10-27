@@ -1,23 +1,25 @@
 FROM python:3.13-slim
 
+# Hugging Face Spaces 要求容器以内置的 UID 1000 运行；Render 等平台同样接受
+# 非 root 用户。保持 UID 固定，避免在 HF 上因权限问题无法写 data/。
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
 
-WORKDIR /app
+RUN useradd --create-home --uid 1000 user
 
-RUN groupadd --system app \
-    && useradd --system --gid app --create-home app
+WORKDIR /home/user/app
 
-COPY requirements.txt ./
+COPY --chown=user:user requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY --chown=user:user app ./app
 
-RUN mkdir -p /app/data \
-    && chown -R app:app /app
+RUN mkdir -p /home/user/app/data
 
-USER app
+USER user
 
 EXPOSE 8000
 
