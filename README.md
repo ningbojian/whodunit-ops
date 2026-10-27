@@ -24,7 +24,7 @@
 | Flutter 双角色客户端 | ⚠️ 部分验证 | `dart analyze` 0 issues、`flutter test` **82 项全部通过**、Android debug APK 已构建；**未做 release 签名、未真机联调、尚未上架** |
 | 硬件灯光 / 音效联动 | ⚠️ 仅契约 | 通用 HTTP 适配器契约，**未对接任何具体灯光 / 音效厂商** |
 | 公网部署 | ❌ 未执行 | **当前没有公网实例**，生产业务数据尚未正式导入 |
-| 测试 | ✅ | **1553 个 pytest 通过**，另 2 个可选 Postgres 测试默认跳过 |
+| 测试 | ✅ | **1559 个 pytest 通过**，另 2 个可选 Postgres 测试默认跳过 |
 
 **怎么读这份文档**：只有标了 ✅ 的才是已实现；其余内容为已定设计或明确标注的未验证项。**明确没做的四件事**——公网部署、Flutter 真机联调、阈值标定、真实模型稳定性——不在这份文档里假装已完成。
 
@@ -128,7 +128,7 @@ python -m app.web.main         # http://127.0.0.1:8000/login
 
 - **存储**：业务数据、审批记录与每日用量可存入 Neon Postgres（`WEB_STORAGE_BACKEND=database`）；本地不填 `DATABASE_URL` 时写 `data/web.sqlite3`。**生产环境已禁止 `WEB_STORAGE_BACKEND=excel`**——临时磁盘会在重启后丢光数据，启动校验直接报错。
 - **已验证**：**Neon 项目 `shiyuan`（分支 `production`）已创建**，schema 已建，本机 uvicorn 的申请 / 审批 / 领取 / 看板 HTTP 链路端到端验收通过；2026-10-20 用真实 Resend 向 `OWNER_EMAIL` 发信成功（只验证了 Resend 账号本人收件）。**生产业务数据尚未正式导入。**
-- **部署前还需要**：把**注册 Resend** 时创建的 API key 与生成的 `WEB_SESSION_SECRET` 配进部署平台的环境变量，并设置 `EMAIL_BACKEND=resend`、`EMAIL_FROM=onboarding@resend.dev`、`WEB_STORAGE_BACKEND=database`（本地 Resend 发信已验证，云端侧尚未配置）。Dockerfile 已按 Hugging Face Spaces 的 UID 1000 约束调整；`render.yaml` 保留为备选（Render 免费层现在要求绑定银行卡）。**尚未实际公网部署**。
+- **部署目标**：**大陆 ECS + Cloudflare Tunnel**，部署文件在 `deploy/cloudflare/`。宿主机不开放任何入站端口，`cloudflared` 只建立出站隧道，因此绕开了「大陆服务器绑定域名必须 ICP 备案」的限制——**这是技术上的灰色地带，不是合规豁免**。正规备选是香港轻量 + Caddy（`deploy/vps/`，免备案）。Hugging Face Spaces 因大陆无法访问已排除；Render 免费层要求绑卡（$1 为临时预授权、不扣款并自动释放，但仍需一张可用的卡）。**尚未实际公网部署**；部署前需要在 `deploy/cloudflare/.env` 填入 `TUNNEL_TOKEN`、Neon 池化连接串、**注册 Resend** 时创建的 API key、DeepSeek key、`WEB_SESSION_SECRET`，并设置 `EMAIL_BACKEND=resend`、`EMAIL_FROM=onboarding@resend.dev`、`WEB_STORAGE_BACKEND=database`（本地 Resend 发信已验证，云端侧尚未配置）。
 - **限制**：**只能运行 1 个 Uvicorn worker**——`InMemorySaver` 是进程内存储，多 worker 会让同一用户的会话记忆分裂。**对话记忆不持久**：重启进程后聊天历史为空。免费托管平台的**磁盘普遍是临时的**且会休眠，所以业务数据必须放 Neon。
 - **不做**：**本轮不做**玩家直连对话、微信自动抓取或自动发消息、支付与订单履约、管理员后台、多 worker、富文本渲染。
 - **迁移与备份**：`python -m app.store.migrate` 把本地 Excel 迁到 Neon，`python -m app.store.export` 导出租户为**十二个 xlsx**（3 张业务表 + 9 个 sidecar）用于备份 / 回滚。
@@ -187,7 +187,7 @@ python -m app.web.main         # http://127.0.0.1:8000/login
 | [docs/tools.md](docs/tools.md) | 12 个工具的完整契约、字段、错误码、已知边界 |
 | [docs/agent.md](docs/agent.md) | Agent 组装、写操作边界、CLI 控制台参数 |
 | [docs/web.md](docs/web.md) | 网页版访问流程、数据隔离、安全配额、本地启动 |
-| [docs/deployment.md](docs/deployment.md) | Neon、Hugging Face Spaces / Render、Excel→数据库迁移、免费层限制 |
+| [docs/deployment.md](docs/deployment.md) | Neon、Cloudflare Tunnel / 香港轻量 / Hugging Face Spaces / Render、Excel→数据库迁移、免费层限制 |
 | [docs/scheduling.md](docs/scheduling.md) | 资源排期、建场、渠道单（含大众点评导出文件导入）、看板、先审后写 |
 | [docs/dm-control.md](docs/dm-control.md) | 阶段模板、场控状态机、硬件降级、Flutter 双角色端 |
 | [docs/public-library.md](docs/public-library.md) | 公共剧本库的读写下界、采集与合规边界 |

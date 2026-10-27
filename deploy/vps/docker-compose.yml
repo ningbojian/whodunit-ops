@@ -1,0 +1,32 @@
+# 单机部署：应用只在内网暴露，公网只开 80/443，由 Caddy 自动申请证书。
+# 用法见 docs/deployment.md「自有服务器」一节。
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    # 不写 ports：应用端口不对公网开放，只给 caddy 访问。
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - web
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?请在 deploy/vps/.env 里设置 SITE_ADDRESS}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

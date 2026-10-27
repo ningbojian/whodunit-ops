@@ -21,6 +21,10 @@ GITIGNORE = PROJECT_ROOT / ".gitignore"
 REQUIREMENTS = PROJECT_ROOT / "requirements.txt"
 HF_SPACE_README = PROJECT_ROOT / "deploy" / "huggingface" / "README.md"
 HF_PUBLISH_SCRIPT = PROJECT_ROOT / "scripts" / "publish_hf_space.py"
+VPS_COMPOSE = PROJECT_ROOT / "deploy" / "vps" / "docker-compose.yml"
+VPS_CADDYFILE = PROJECT_ROOT / "deploy" / "vps" / "Caddyfile"
+CLOUDFLARE_COMPOSE = PROJECT_ROOT / "deploy" / "cloudflare" / "docker-compose.yml"
+CLOUDFLARE_README = PROJECT_ROOT / "deploy" / "cloudflare" / "README.md"
 
 # 真实 DeepSeek / Resend key 的随机主体远长于测试里的演示串；
 # 阈值取 24，避免把 sk-demo123456 这类故意保留的脱敏样例误报。
@@ -29,6 +33,13 @@ SECRET_LIKE = re.compile(r"\b(?:sk-|re_)[A-Za-z0-9_-]{24,}\b")
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _without_comments(text: str) -> str:
+    """去掉整行注释，避免说明文字里的「ports:」被误判成真实配置。"""
+    return "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("#")
+    )
 
 
 def test_dockerfile_runs_single_non_root_worker():
@@ -285,6 +296,56 @@ def test_publish_script_only_ships_runtime_files():
     assert 'COPY_FILES = ("requirements.txt", "Dockerfile")' in text
     assert 'os.environ.get("HF_TOKEN"' in text
     assert "SPACE_README" in text
+    assert not SECRET_LIKE.search(text)
+
+
+def test_vps_compose_only_exposes_caddy():
+    """应用端口不能直接对公网开放，只有 80/443 由 Caddy 承担。"""
+    text = _read(VPS_COMPOSE)
+
+    assert "80:80" in text and "443:443" in text
+    assert "restart: unless-stopped" in text
+    web_block = text.split("web:", 1)[1].split("caddy:", 1)[0]
+    assert "expose:" in web_block and '"8000"' in web_block
+    assert "ports:" not in web_block
+    assert "SITE_ADDRESS" in text
+
+
+def test_vps_caddyfile_keeps_access_logs_off():
+    """审批与备用链接的 token 在 URL 里，Caddy 不能启用访问日志。"""
+    text = _read(VPS_CADDYFILE)
+
+    assert "reverse_proxy web:8000" in text
+    assert "{$SITE_ADDRESS}" in text
+    assert re.search(r"^\s*log(\s|$)", text, re.MULTILINE) is None
+
+
+def test_cloudflare_tunnel_compose_publishes_no_ports():
+    """隧道是出站连接：宿主机不能发布任何端口，否则应用会绕过隧道暴露到公网。"""
+    text = _read(CLOUDFLARE_COMPOSE)
+    body = _without_comments(text)
+
+    assert "cloudflare/cloudflared" in body
+    assert "tunnel" in body and "run" in body
+    assert "TUNNEL_TOKEN" in body
+    assert "expose:" in body and '"8000"' in body
+    # Docker 发布端口会直接写 iptables、绕过 ufw，这里必须一个都没有。
+    assert "ports:" not in body
+    assert body.count("restart: unless-stopped") == 2
+    # 大陆网络对 QUIC 不稳，默认走 http2。
+    assert "--protocol http2" in body
+    # TLS 由 Cloudflare 边缘终结，不需要 Caddy。
+    assert "caddy" not in body.lower()
+
+
+def test_cloudflare_tunnel_readme_documents_origin():
+    """Public Hostname 配在 Cloudflare 控制台，重建隧道会丢，必须写进仓库备查。"""
+    text = _read(CLOUDFLARE_README)
+
+    assert "http://web:8000" in text
+    assert "demo.ghtrending.cyou" in text
+    assert "TUNNEL_TOKEN" in text
+    assert "--workers 1" in text
     assert not SECRET_LIKE.search(text)
 
 

@@ -1,0 +1,9 @@
+# SITE_ADDRESS 由 docker-compose 从 deploy/vps/.env 注入，例如 demo.example.com。
+# 不写 log 指令：审批链接的 token 在 URL 里，Caddy 默认不记录访问日志。
+{$SITE_ADDRESS} {
+	reverse_proxy web:8000
+	encode gzip
+	header {
+		-Server
+	}
+}

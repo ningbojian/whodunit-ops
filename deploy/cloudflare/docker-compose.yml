@@ -1,0 +1,24 @@
+# 单机部署（大陆 ECS）：应用只在 compose 网络内监听，公网流量全部走
+# cloudflared 的出站隧道，宿主机不发布任何端口。
+# 用法见 docs/deployment.md「阿里云 ECS + Cloudflare Tunnel」一节。
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    # 不发布到宿主机：容器只在这个 compose 网络里监听 8000。
+    expose:
+      - "8000"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - web
+    # 大陆网络对 QUIC 经常不稳，默认走 http2；确认稳定后可删掉 --protocol 换回 QUIC。
+    command: tunnel --no-autoupdate --protocol http2 run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?请在 deploy/cloudflare/.env 里设置 TUNNEL_TOKEN}
