@@ -210,6 +210,8 @@ def test_gitignore_excludes_env_and_web_user_data():
         assert entry in text, entry
     # 保留锁文件，保证可复现构建。
     assert "mobile_app/pubspec.lock" not in text
+    # 临时传输补丁只是一次性载体，不该留在仓库里。
+    assert re.search(r"^\*\.patch$", text, re.MULTILINE)
 
 
 def test_web_dependencies_are_pinned():
