@@ -1059,6 +1059,35 @@
     var schedulePromise = null;
     // 最近一次成功渲染的看板数据：建场时用来判断「这场是不是本来就有」。
     var lastScheduleData = null;
+
+    // 首屏数据由服务端随页面下发（data-bootstrap），解析后直接当一次成功的
+    // GET /api/schedule 结果用。服务端已经为渲染查过一遍库，再让浏览器发一次
+    // 相同请求，在跨境部署下要多付 12 次串行往返（约 0.66 秒）。
+    var bootstrapResult = null;
+    (function readBootstrap() {
+      var node = document.querySelector("[data-schedule-page]");
+      if (!node) {
+        return;
+      }
+      var raw = node.getAttribute("data-bootstrap");
+      if (!raw) {
+        return;
+      }
+      try {
+        var parsed = JSON.parse(raw);
+        if (parsed && parsed.ok) {
+          bootstrapResult = {
+            response: { ok: true, status: 200 },
+            data: parsed
+          };
+          lastScheduleData = parsed;
+        }
+      } catch (error) {
+        // 解析失败就退回网络请求，不影响功能。
+        bootstrapResult = null;
+      }
+    })();
+
     function rememberSchedule(result) {
       if (result && result.response && result.response.ok &&
           result.data && result.data.ok) {
@@ -1068,7 +1097,13 @@
     }
     function loadSchedule(fresh) {
       if (!schedulePromise || fresh) {
-        schedulePromise = apiFetch("/api/schedule?include_scripts=0").then(rememberSchedule);
+        if (!fresh && bootstrapResult) {
+          // 首屏只消费一次；之后的刷新（fresh）一律走网络拿新快照。
+          schedulePromise = Promise.resolve(bootstrapResult);
+          bootstrapResult = null;
+        } else {
+          schedulePromise = apiFetch("/api/schedule?include_scripts=0").then(rememberSchedule);
+        }
       }
       return schedulePromise;
     }

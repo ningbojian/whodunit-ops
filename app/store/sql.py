@@ -658,11 +658,17 @@ class SqlStore:
         self,
         email_hash: str | None = None,
         display_name: str | None = None,
+        *,
+        probe: dict[str, bool | None] | None = None,
     ) -> None:
         """幂等创建租户行，并检测 tenant_id 前缀碰撞。
 
         tenant_id 取完整邮箱哈希的前 16 位；若另一条完整哈希占用了同一
         前缀，则拒绝，而不是把两个邮箱的数据混在一起。
+
+        ``probe`` 是给调用方的回填出口：这里本来就 SELECT 了整行租户记录，
+        把 seeded 状态一并取回，上层就不必为了 ``is_seeded()`` 再查一次。
+        跨境部署下每条往返都是 55ms 量级，登录后的每个页面都要走这条路径。
         """
         normalized = (email_hash or "").strip().lower() or None
         if normalized is not None and len(normalized) != 64:
@@ -673,9 +679,11 @@ class SqlStore:
         try:
             with self.engine.begin() as conn:
                 row = conn.execute(
-                    select(tenants.c.email_hash, tenants.c.display_name).where(
-                        tenants.c.tenant_id == self.tenant_id
-                    )
+                    select(
+                        tenants.c.email_hash,
+                        tenants.c.display_name,
+                        tenants.c.seeded_at,
+                    ).where(tenants.c.tenant_id == self.tenant_id)
                 ).first()
                 if row is None:
                     conn.execute(
@@ -686,7 +694,12 @@ class SqlStore:
                             created_at=now,
                         )
                     )
+                    if probe is not None:
+                        probe["seeded"] = False
                     return
+
+                if probe is not None:
+                    probe["seeded"] = row.seeded_at is not None
 
                 existing_hash = row.email_hash
                 if normalized and existing_hash and existing_hash != normalized:

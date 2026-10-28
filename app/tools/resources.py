@@ -682,17 +682,22 @@ def dm_script_history(
     *,
     path: Path | None = None,
     store: Any = None,
+    sessions: pd.DataFrame | None = None,
 ) -> dict[str, dict[str, Any]]:
     """从 dm_runs ⋈ sessions 派生 DM 带本历史（已取消场次不计）。
 
     返回 {dm_id: {past_runs, distinct_scripts, recent[≤8]}}。
     script_counts 是 name_key → 带本次数，仅供排期熟悉度排序，不进 API 载荷。
+
+    ``sessions`` 允许调用方传入已加载的帧：排期页在看板渲染阶段已经读过
+    同一张表，这里再读一次是纯浪费（跨境部署一条 SQL 就是 55ms）。
     """
     from app.tools.scripts import normalize_script_name
     from app.tools.storage import STATUS_CANCELLED
 
     runs = store.load_dm_runs() if store is not None else pd.DataFrame()
-    sessions = store.load_sessions() if store is not None else pd.DataFrame()
+    if sessions is None:
+        sessions = store.load_sessions() if store is not None else pd.DataFrame()
     if runs is None or runs.empty or sessions is None or sessions.empty:
         return {}
     session_by_id = {

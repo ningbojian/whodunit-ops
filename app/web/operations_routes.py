@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -90,9 +91,22 @@ def schedule_page(
     end: str | None = None,
 ):
     service = _service(request)
-    data = service.schedule_view(access.email_hash, start, end)
+    # include_scripts=False：看板渲染不需要 5800+ 行公共剧本，省掉大段序列化。
+    data = service.schedule_view(access.email_hash, start, end, include_scripts=False)
     data["hardware_configured"] = bool(service._hardware().configured)
-    return _page(request, access, "schedule.html", "schedule", {"data": data})
+    # 首屏数据随页面下发，app.js 直接复用，不再另发一次 GET /api/schedule。
+    # 跨境部署下这一条省掉 12 次串行数据库往返（约 0.66 秒）。
+    # 形状与 /api/schedule 的响应体一致（含 "ok"），前端解析后可以无差别使用。
+    bootstrap = json.dumps(
+        {"ok": True, **data}, ensure_ascii=False, separators=(",", ":")
+    )
+    return _page(
+        request,
+        access,
+        "schedule.html",
+        "schedule",
+        {"data": data, "bootstrap": bootstrap},
+    )
 
 
 @router.get("/imports", response_class=HTMLResponse)

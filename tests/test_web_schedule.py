@@ -146,6 +146,32 @@ def test_schedule_page_has_create_and_preview_dialogs(client):
     assert "location.reload" not in schedule_js
 
 
+def test_schedule_page_inlines_first_screen_data(client):
+    """首屏数据随页面下发，浏览器不必再发一次 GET /api/schedule。
+
+    跨境部署时那条重复请求要重跑 12 条串行查询（约 0.66 秒）。这里只校验
+    页面确实带上了与 API 同形的载荷，且属性值被正常转义（JSON 里的双引号
+    不能提前闭合属性）。
+    """
+    import json
+
+    html = client.get("/schedule").text
+    match = re.search(r'data-bootstrap="([^"]*)"', html)
+    assert match, html[:400]
+    raw = match.group(1)
+    # Jinja 自动转义把 " 变成 &#34;；浏览器读取属性时会还原成 "。
+    assert '"' not in raw
+    payload = json.loads(raw.replace("&#34;", '"'))
+    assert payload["ok"] is True
+    assert payload["sessions"]
+    assert "window" in payload and payload["window"]["start"]
+    # 首屏不序列化 5800+ 行公共剧本，但形状保持为列表。
+    assert payload["scripts"] == []
+    # 场次载荷与 API 一致（房间/DM 名称、时长都已补好）。
+    api = client.get("/api/schedule?include_scripts=0").json()
+    assert payload["sessions"] == api["sessions"]
+
+
 def test_create_session_promotes_directly_and_auto_assigns(client):
     """硬必填齐全直接建场：无草稿，建场即自动排房排 DM。"""
     headers = _headers(client)

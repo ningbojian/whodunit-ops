@@ -3,7 +3,10 @@
 {% block page %}schedule{% endblock %}
 {% block body %}
 {% include "partials/nav.html" %}
-<main class="page-shell" data-schedule-page data-as-of="{{ data.as_of }}">
+<main class="page-shell" data-schedule-page data-as-of="{{ data.as_of }}"
+      {# 首屏数据随页面下发，app.js 复用，不再另发一次 GET /api/schedule。
+         放在 HTML 属性里而不是内联脚本：属性会正常转义，CSP 也不需要放宽。 #}
+      data-bootstrap="{{ bootstrap }}">
   <section class="page-head">
     <div>
       <p class="eyebrow">资源排期</p>
@@ -32,7 +35,7 @@
       </div>
       <span class="muted" id="board-hint">{{ data.window.start }} 至 {{ data.window.end }} · 拖动卡片改期；点空位弹出建场卡片</span>
     </div>
-    {# 客户端建板：app.js initTimeBoard / initStatusBoard 读 /api/schedule 后渲染。 #}
+    {# 客户端建板：app.js initTimeBoard / initStatusBoard 读首屏数据后渲染。 #}
     <div id="time-board" class="kanban-board"
          data-window-start="{{ data.window.start }}"
          data-window-end="{{ data.window.end }}"

@@ -656,9 +656,16 @@ def list_schedule(
     start_from: Any = None,
     start_to: Any = None,
     now: Any = None,
+    context: "ScheduleContext | None" = None,
 ) -> dict[str, Any]:
+    """按窗口列出场次及其房间/DM 分配。
+
+    ``context`` 允许调用方传入已经加载好的帧：``schedule_view`` 需要房间、
+    DM、剧本的完整数据，如果每次都让这里再从库里读一遍，同一个请求内
+    rooms/dms/scripts 会被各读两遍（跨境部署每条 55ms）。
+    """
     moment = _now(now)
-    context = load_schedule_context(store)
+    context = load_schedule_context(store) if context is None else context
     sessions = context.sessions.copy()
     sessions["start_time"] = pd.to_datetime(sessions["start_time"], errors="coerce")
     if start_from is not None:

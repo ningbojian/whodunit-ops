@@ -64,6 +64,7 @@ cd whodunit-ops && git pull && cd deploy/cloudflare && docker compose up -d --bu
 - Cloudflare 免费版**没有中国大陆节点**。实测：从大陆 ECS 和国内家宽访问 `demo.ghtrending.cyou`，Cloudflare 都返回 `cf-ray` 的 `MAN`（曼彻斯特）或 `LAX`（洛杉矶）节点，不经过香港。一次静态文件请求（`/static/app.css`，不碰数据库）首字节就要 2.2 秒，因为请求被两次跨洋：浏览器 → 欧美边缘 → 穿回大陆 ECS。这是免费版 anycast 选路的物理成本，**改配置和改代码都消不掉**。容器内部同一个静态文件只要 3 毫秒，所以应用本身是快的。
 - **需要低延迟时，正解是换到香港或境外的轻量服务器直连**（见下方「备选：香港轻量 + Caddy」），不要继续在隧道上做优化。要留在这台大陆 ECS 上，就只能接受 2.5 秒起步的静态资源延迟——应用侧能做的只是不再额外叠加数据库往返（见下一条）。
 - **跨境部署要控制每个请求的数据库往返次数。** 实测从这台 ECS 到 Neon 新加坡：DNS 约 120ms、TCP 建连 55ms、热连接上一次查询 55ms、新建连接含握手约 240ms。所以「多查一条 SQL」就是多 55ms，「多建一次连接」就是多 240ms。`/healthz` 原先在同一个引擎上做四次独立探测（还叠加 `pool_pre_ping` 和归还时的 `ROLLBACK`），实测 0.82 秒；已合并为一次取连接、一条 SQL，约 0.1 秒。新增健康检查或页面查询时请沿用这个口径。
+- **排期页首屏不再让浏览器补一次请求。** `/schedule` 渲染时已经查过一遍库，`app.js` 原先还会解析完 HTML 再发一次 `GET /api/schedule`，把同一批数据（12 条串行查询）重跑一遍。现在服务端把结果序列化进 `data-schedule-page` 的 `data-bootstrap` 属性，前端解析后直接当首屏数据用；只有显式刷新（`loadSchedule(true)`）才走网络。放在 HTML 属性而不是内联脚本里，是为了保持 CSP `script-src 'self'` 不放宽。同一个请求内 `schedule_view` 也只读一次 `ScheduleContext`，rooms/dms/scripts/sessions 不再各读两三遍——`/schedule` 的查询数从 24 条降到 12 条，其中首屏的实际网络往返只有这一页本身。
 - 容器磁盘是临时的，业务数据在 Neon；重新部署只丢进程内的对话记忆。
 - **本地管理生成的凭据不能入库。** `cloudflared tunnel login` 写出 `cert.pem`（账户级 API 证书），`create` 写出 `<UUID>.json`（隧道密钥）；`.gitignore` 已把 `deploy/cloudflare/cloudflared/` 整体排除，只放行 `config.yml.example`。
 - **凭据属主要改成 65532。** 准备凭据的一次性容器用 `--user root` 运行，写出的文件是 `root:root 0600`；运行时容器以 nonroot（uid 65532）启动，读不到就会刷 `permission denied`。`chown 65532:65532` 之后保持 `0600` 即可。

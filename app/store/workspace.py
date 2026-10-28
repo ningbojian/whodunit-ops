@@ -69,9 +69,12 @@ class DatabaseWorkspaceManager:
         return SqlStore(self.engine, key), key
 
     def ensure(self, email_hash: str) -> TenantWorkspace:
+        # ensure_tenant 本来就 SELECT 整行租户，顺手把 seeded 状态取回来，
+        # 省掉紧随其后的一次 is_seeded() 查询。
+        probe: dict[str, bool | None] = {"seeded": None}
         try:
             store, key = self.store_for(email_hash)
-            store.ensure_tenant(email_hash=email_hash)
+            store.ensure_tenant(email_hash=email_hash, probe=probe)
         except TenantConflictError as exc:
             raise TenantCollisionError(str(exc)) from None
         except TenantWorkspaceError:
@@ -81,7 +84,11 @@ class DatabaseWorkspaceManager:
 
         try:
             with store.write_lock():
-                if store.is_seeded():
+                seeded = probe["seeded"]
+                if seeded is None:
+                    # 只有在 ensure_tenant 走了 IntegrityError 回退时才会落到这里。
+                    seeded = store.is_seeded()
+                if seeded:
                     self._ensure_public_library()
                     return TenantWorkspace(tenant_id=key, store=store)
                 if store.is_empty():

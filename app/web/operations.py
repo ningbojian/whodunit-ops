@@ -239,11 +239,14 @@ class OperationsService:
             return None
         return frame
 
-    def _merged_scripts(self, store: Any) -> pd.DataFrame:
-        """私有库 + 公共库遮蔽合并（仅读路径；写入仍只进私有库）。"""
+    def _merged_scripts(self, store: Any, *, private: Any = None) -> pd.DataFrame:
+        """私有库 + 公共库遮蔽合并（仅读路径；写入仍只进私有库）。
+
+        ``private`` 允许调用方传入已加载的私有剧本帧，避免同一请求内重读。
+        """
         from app.tools.public_library import merge_with_shadow
 
-        private = load_scripts(store=store)
+        private = load_scripts(store=store) if private is None else private
         public = self._public_scripts_frame()
         if public is None:
             return private
@@ -900,13 +903,19 @@ class OperationsService:
     ) -> dict[str, Any]:
         store = self._store(email_hash)
         start, end = self._window(start_from, start_to)
+        # 只读一次上下文：场次、房间、DM、班次、分配、私有剧本都在这里。
+        # 原先 list_schedule 自己再读一遍 sessions/assignments/rooms/dms/shifts/
+        # scripts，rooms 和 dms 后面还要各读一次，同一个请求里同一张表读三遍。
+        context = load_schedule_context(store)
         listed = list_schedule(
-            store, start_from=start, start_to=end, now=self.business_now()
+            store,
+            start_from=start,
+            start_to=end,
+            now=self.business_now(),
+            context=context,
         )
-        # 房间和 DM 各查一次，后面组装名称映射和返回体都复用同一份，
-        # 不再像原先那样在同一个请求里各读两遍（跨境部署每条查询 55ms）。
-        rooms_frame = load_rooms(store=store)
-        dms_frame = load_dms(store=store)
+        rooms_frame = context.rooms
+        dms_frame = context.dms
         rooms = {
             _text(row.get("room_id")): _text(row.get("name"))
             for row in rooms_frame.to_dict("records")
@@ -917,7 +926,7 @@ class OperationsService:
         }
         # 时长映射：看板（web 时间轴 / Flutter 时间轴）需要知道每场占多久。
         # 用剧本名精确匹配，缺失或非法时退回全局默认 240 分钟。
-        scripts = self._merged_scripts(store)
+        scripts = self._merged_scripts(store, private=context.scripts)
         duration_map: dict[str, int] = {}
         if not scripts.empty:
             for row in scripts.to_dict("records"):
@@ -964,7 +973,8 @@ class OperationsService:
                         "note": _text(row.get("note")) or None,
                     }
                 )
-        history = dm_script_history(store=store)
+        # 场次帧已经在上面的 load_schedule_context 里读过了，不必再读一次。
+        history = dm_script_history(store=store, sessions=context.sessions)
         dm_rows = []
         for row in dms_frame.to_dict("records"):
             item = dms_to_dict(row)

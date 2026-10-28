@@ -137,6 +137,54 @@ def test_runs_page_loads_each_table_once(tmp_path):
     assert count("FROM scripts") <= 1, statements
 
 
+def test_schedule_page_loads_each_table_once(tmp_path):
+    """排期首屏不能对同一张表重复读，也不能让浏览器再补一次请求。
+
+    ``schedule_view`` 原先在同一个请求里把 rooms/dms/scripts/sessions 各读
+    两到三遍（``list_schedule`` 自己读一遍，调用方再读一遍），实测 17 条。
+    共享 ``ScheduleContext`` 后每张表只读一次。首屏数据已经随 HTML 下发，
+    所以这里统计的就是首屏的全部查询。
+    """
+    from sqlalchemy import event
+
+    clock = MutableClock()
+    app, _ = build_database_app(tmp_path, clock, [])
+
+    statements: list[str] = []
+    event.listen(
+        app.state.engine,
+        "before_cursor_execute",
+        lambda *args: statements.append(args[2]),
+    )
+
+    def count(query_target: str) -> int:
+        return sum(
+            1
+            for sql in statements
+            if query_target in sql and sql.lstrip().upper().startswith("SELECT")
+        )
+
+    with TestClient(app) as client:
+        fully_authorize(client, app.state.mailer)
+        client.get("/schedule")  # 首访会灌演示数据，不计入
+        statements.clear()
+        assert client.get("/schedule").status_code == 200
+
+    for table in (
+        "FROM sessions",
+        "FROM rooms",
+        "FROM dms",
+        "FROM session_assignments",
+        "FROM scripts",
+        "FROM dm_leaves",
+        "FROM dm_runs",
+    ):
+        assert count(table) <= 1, (table, statements)
+    # 登录态两条（access_requests、tenants）加上面七条，再加 bookings、
+    # dm_shifts、public_scripts 三条，一共 12 条；多出来就是重复读回来了。
+    assert len(statements) <= 12, statements
+
+
 def test_two_emails_are_isolated_in_database_mode(tmp_path):
     clock = MutableClock()
     app, _ = build_database_app(
