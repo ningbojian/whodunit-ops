@@ -68,6 +68,23 @@ chmod 600 cloudflared/*.json cloudflared/config.yml
 ls -ln cloudflared/          # 第三、四列应是 65532 65532
 ```
 
+**`cert.pem` 不在上面的 chown 里，这是有意的。** 隧道运行时只读 `<UUID>.json`，不需要
+`cert.pem`；后者是账户级 API 证书，只有 `tunnel info`、`tunnel route dns`、`tunnel create`
+这类要调 Cloudflare API 的子命令才用。因此它会保持 `root:root 0600`，用默认 nonroot 跑这些
+命令就会报：
+
+```
+Can't read origin cert from /etc/cloudflared/cert.pem
+```
+
+这不是凭据损坏，也不是权限配错。诊断时显式用 root：
+
+```bash
+docker run --rm --user root -v $PWD/cloudflared:/etc/cloudflared:ro \
+  cloudflare/cloudflared:latest \
+  tunnel --config /etc/cloudflared/config.yml info <UUID>
+```
+
 ```bash
 cp ../vps/.env .                       # 或直接新建；同级的 .env 里不要再写 TUNNEL_TOKEN
 cp cloudflared/config.yml.example cloudflared/config.yml
@@ -96,8 +113,10 @@ compose 网络里，`web` 是服务名，由 Docker 内置 DNS 解析。宿主�
   `:8000` 上裸奔，隧道也就没有意义了。
 - **不要起多个 uvicorn worker。** 对话记忆是进程内的 `InMemorySaver`，多 worker 会让同一用户的
   历史分裂。`Dockerfile` 已固定 `--workers 1`。
-- **`--protocol http2` 是默认值。** 大陆网络对 QUIC（UDP 7844）经常不稳定，表现为隧道反复重连。
-  确认网络稳定后可以删掉这个参数换回 QUIC。
+- **`--protocol http2` 不是加速手段。** 2026-10-28 实测：4 条连接在 http2 下全部注册成功
+  （`location=lax01/lax05/lax09`），但纯 HTTP 请求同样慢到 1–2.7 秒——慢的是 CN↔LAX 数据链路，
+  与协议无关。保留该参数的理由只是避免 QUIC 在丢包链路上频繁重连。**换协议不会让页面变快**，
+  详见 `docs/deployment.md` 的延迟实测表。
 - 客户端 IP 由 Cloudflare 通过 `X-Forwarded-For` 传入，`Dockerfile` 的 `--proxy-headers
   --forwarded-allow-ips='*'` 会让 uvicorn 采信它，所以按 IP 的限流仍然有效。因为端口不发布，
   这条设置不会被外部伪造。

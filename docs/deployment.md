@@ -59,15 +59,32 @@ cd whodunit-ops && git pull && cd deploy/cloudflare && docker compose up -d --bu
 
 ### 说明
 
-- **`--protocol http2` 是默认值。** 大陆网络对 QUIC（UDP 7844）经常不稳，表现为隧道反复重连；网络确认稳定后可删掉该参数换回 QUIC。
+- **`--protocol http2` 不是性能瓶颈，不要指望换协议能解决慢。** 原先这里写的是「大陆网络对 QUIC 经常不稳」，但实测（2026-10-28）里 `--protocol http2` 下 4 条连接全部注册成功，而纯 HTTP 请求（完全不经 TLS/HTTP2）同样慢到 1–2.7 秒。慢的是 CN→LAX 这条数据链路，与传输协议无关。保留该参数的理由只剩「避免 QUIC 在丢包链路上频繁重连」，**不是加速手段**。
 - 客户端 IP 由 Cloudflare 通过 `X-Forwarded-For` 传入，配合 `Dockerfile` 的 `--proxy-headers --forwarded-allow-ips='*'`，按 IP 的限流仍然有效。端口不发布，因此这条设置不会被外部伪造。
-- Cloudflare 免费版**没有中国大陆节点**。实测：从大陆 ECS 和国内家宽访问 `demo.ghtrending.cyou`，Cloudflare 都返回 `cf-ray` 的 `MAN`（曼彻斯特）或 `LAX`（洛杉矶）节点，不经过香港。一次静态文件请求（`/static/app.css`，不碰数据库）首字节就要 2.2 秒，因为请求被两次跨洋：浏览器 → 欧美边缘 → 穿回大陆 ECS。这是免费版 anycast 选路的物理成本，**改配置和改代码都消不掉**。容器内部同一个静态文件只要 3 毫秒，所以应用本身是快的。
-- **需要低延迟时，正解是换到香港或境外的轻量服务器直连**（见下方「备选：香港轻量 + Caddy」），不要继续在隧道上做优化。要留在这台大陆 ECS 上，就只能接受 2.5 秒起步的静态资源延迟——应用侧能做的只是不再额外叠加数据库往返（见下一条）。
+- Cloudflare 免费版**没有中国大陆节点**。实测（2026-10-28，本地管理隧道）：`cloudflared` 的 4 条连接 `connIndex=0..3` 全部落在洛杉矶（`lax01`、`lax05`、`lax09`，IP 段 `198.41.192.0/200.0`），没有香港、也没有曼彻斯特。请求因此被两次跨洋：浏览器 → 洛杉矶边缘 → 穿回大陆 ECS。容器内部同一个静态文件只要 3 毫秒，所以应用本身是快的。
+- **这条链路会丢包，延迟因此不可预测——这是当前最大的性能问题，且应用侧无法修复。** 2026-10-28 的采样（国内家宽，5 次一组）：
+
+  | 阶段 | 实测 | 说明 |
+  |---|---|---|
+  | DNS | 7–26ms | 正常 |
+  | TCP 握手 | 0.19–0.31s | 稳定，说明控制包能通过 |
+  | TLS 握手 | 0.57–14.8s | 波动极大 |
+  | 首字节 | 0.9–19s | 波动极大，另有 20s / 30s 直接超时 |
+
+  决定性对照：**纯 HTTP（80 端口，完全不经 TLS）TTFB 同样要 0.91 / 0.98 / 2.69 秒**，所以慢与 TLS、与 HTTP/2 多路复用都无关。观测到的 1、4、8、16 秒数值阶梯符合 TCP 指数退避重传（RFC 6298 初始 RTO 为 1 秒），即数据包在 CN↔LAX 之间被丢弃后等待重传。同期 `github.com` 的 TLS 只要 0.24 秒、`baidu.com` 只要 0.07 秒，说明不是「所有国际链路都慢」。
+- **需要低延迟时，正解是换到香港或境外的轻量服务器直连**（见下方「备选：香港轻量 + Caddy」），不要继续在隧道上做优化。换协议（`quic` / `http2`）、改 TLS 版本、改 HTTP 版本都**不会**改善上面这组数字——它们改变不了 anycast 把流量送到洛杉矶这件事。要留在这台大陆 ECS 上，应用侧能做的只有压缩每个请求的往返次数（见下两条）。
 - **跨境部署要控制每个请求的数据库往返次数。** 实测从这台 ECS 到 Neon 新加坡：DNS 约 120ms、TCP 建连 55ms、热连接上一次查询 55ms、新建连接含握手约 240ms。所以「多查一条 SQL」就是多 55ms，「多建一次连接」就是多 240ms。`/healthz` 原先在同一个引擎上做四次独立探测（还叠加 `pool_pre_ping` 和归还时的 `ROLLBACK`），实测 0.82 秒；已合并为一次取连接、一条 SQL，约 0.1 秒。新增健康检查或页面查询时请沿用这个口径。
 - **排期页首屏不再让浏览器补一次请求。** `/schedule` 渲染时已经查过一遍库，`app.js` 原先还会解析完 HTML 再发一次 `GET /api/schedule`，把同一批数据（12 条串行查询）重跑一遍。现在服务端把结果序列化进 `data-schedule-page` 的 `data-bootstrap` 属性，前端解析后直接当首屏数据用；只有显式刷新（`loadSchedule(true)`）才走网络。放在 HTML 属性而不是内联脚本里，是为了保持 CSP `script-src 'self'` 不放宽。同一个请求内 `schedule_view` 也只读一次 `ScheduleContext`，rooms/dms/scripts/sessions 不再各读两三遍——`/schedule` 的查询数从 24 条降到 12 条，其中首屏的实际网络往返只有这一页本身。
 - 容器磁盘是临时的，业务数据在 Neon；重新部署只丢进程内的对话记忆。
 - **本地管理生成的凭据不能入库。** `cloudflared tunnel login` 写出 `cert.pem`（账户级 API 证书），`create` 写出 `<UUID>.json`（隧道密钥）；`.gitignore` 已把 `deploy/cloudflare/cloudflared/` 整体排除，只放行 `config.yml.example`。
 - **凭据属主要改成 65532。** 准备凭据的一次性容器用 `--user root` 运行，写出的文件是 `root:root 0600`；运行时容器以 nonroot（uid 65532）启动，读不到就会刷 `permission denied`。`chown 65532:65532` 之后保持 `0600` 即可。
+- **`cert.pem` 保持 `root:root 0600` 是有意的，但诊断命令要用 `--user root`。** 运行隧道只需要 `<UUID>.json`（属主 65532 即可）；`cert.pem` 是账户级 API 证书，只有 `tunnel info`、`tunnel route dns` 这类会调用 Cloudflare API 的子命令才读它。用默认 nonroot 跑这些命令会报 `Can't read origin cert from /etc/cloudflared/cert.pem`，这不是凭据损坏：
+
+  ```bash
+  docker run --rm --user root -v $PWD/cloudflared:/etc/cloudflared:ro \
+    cloudflare/cloudflared:latest \
+    tunnel --config /etc/cloudflared/config.yml info <UUID>
+  ```
 
 ## 备选：香港轻量 + Caddy
 
