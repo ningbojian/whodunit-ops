@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from datetime import datetime, timezone
 
@@ -187,7 +188,7 @@ def test_duplicate_script_names_abort_tenant(tmp_path, capsys):
 def test_state_import_preserves_approval_and_usage(tmp_path):
     old_db = tmp_path / "old_state.sqlite3"
     clock = lambda: datetime(2026, 10, 20, 4, 0, tzinfo=UTC)
-    access = AccessStore(old_db, now_fn=clock)
+    access = AccessStore(old_db, now_fn=clock, ip_hash_secret="test-ip-secret")
     created = access.create_request(
         "user@example.com", "阿青", browser_token="browser-" + "x" * 20
     )
@@ -206,7 +207,9 @@ def test_state_import_preserves_approval_and_usage(tmp_path):
     from app.web.access_sql import DatabaseAccessStore
     from app.web.usage_sql import DatabaseUsageStore
 
-    imported = DatabaseAccessStore(engine, now_fn=clock)
+    imported = DatabaseAccessStore(
+        engine, now_fn=clock, ip_hash_secret="test-ip-secret"
+    )
     record = imported.get_by_approval_token(created.approval_token)
     assert record is not None
     assert record.status == "approved"
@@ -214,6 +217,45 @@ def test_state_import_preserves_approval_and_usage(tmp_path):
         "2026-10-20",
         1,
     )
+    engine.dispose()
+
+
+def test_state_import_drops_legacy_ip_hashes(tmp_path):
+    """旧状态库里的 IP 哈希是裸 SHA-256，导入时必须丢弃。
+
+    这个字段只服务「同一 IP 每小时的申请上限」，窗口 1 小时；历史值对新库
+    没有任何用处，留着却能被枚举 IPv4 反推地址。
+    """
+    old_db = tmp_path / "old_state.sqlite3"
+    clock = lambda: datetime(2026, 10, 20, 4, 0, tzinfo=UTC)
+    access = AccessStore(old_db, now_fn=clock, ip_hash_secret="test-ip-secret")
+    created = access.create_request(
+        "user@example.com",
+        "阿青",
+        browser_token="browser-" + "x" * 20,
+        requester_ip="203.0.113.7",
+    )
+    # 模拟这次更新之前写下的行：不带密钥的裸 SHA-256。
+    with access._conn:
+        access._conn.execute(
+            "UPDATE access_requests SET requester_ip_hash = ?",
+            (hashlib.sha256(b"203.0.113.7").hexdigest(),),
+        )
+    access.close()
+
+    db = tmp_path / "migrate.sqlite3"
+    assert main(["--state-only", "--state", str(old_db), "--sqlite", str(db)]) == 0
+
+    engine = create_database_engine(sqlite_path=db)
+    ensure_schema(engine)
+    from app.web.access_sql import DatabaseAccessStore
+
+    imported = DatabaseAccessStore(
+        engine, now_fn=clock, ip_hash_secret="test-ip-secret"
+    )
+    record = imported.get_by_approval_token(created.approval_token)
+    assert record is not None
+    assert record.requester_ip_hash is None
     engine.dispose()
 
 

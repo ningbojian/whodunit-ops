@@ -185,6 +185,103 @@ def test_schedule_page_loads_each_table_once(tmp_path):
     assert len(statements) <= 12, statements
 
 
+def test_public_scripts_are_read_once_across_requests(tmp_path):
+    """公共库帧要跨请求缓存，不能每个页面都整表重读。
+
+    公共库是只读、全局共享的数据，``load()`` 每次都会 ``SELECT`` 全部
+    5800+ 行并重建 DataFrame。原先 ``_public_scripts_frame`` 每个请求都
+    调一次，``_merged_scripts`` 在多个视图里都会走到。OperationsService
+    与 ChatRuntime 现在共用一个 ``PublicScriptsCache``。
+    """
+    from sqlalchemy import event
+
+    clock = MutableClock()
+    app, _ = build_database_app(tmp_path, clock, [])
+
+    statements: list[str] = []
+    event.listen(
+        app.state.engine,
+        "before_cursor_execute",
+        lambda *args: statements.append(args[2]),
+    )
+
+    def public_reads() -> int:
+        return sum(
+            1
+            for sql in statements
+            if "FROM public_scripts" in sql and sql.lstrip().upper().startswith("SELECT")
+        )
+
+    with TestClient(app) as client:
+        fully_authorize(client, app.state.mailer)
+        client.get("/resources")  # 首访可能触发种子，不计入
+        statements.clear()
+        # 连续两个请求都读公共库的页面。
+        assert client.get("/resources").status_code == 200
+        assert client.get("/schedule").status_code == 200
+        reads = public_reads()
+
+    # 第二次请求应当全部命中缓存；允许首访那一次没被清干净，所以上限是 1。
+    assert reads <= 1, statements
+
+
+def test_approval_email_does_not_block_the_event_loop(tmp_path):
+    """async 路由里的同步发信必须丢进线程池。
+
+    ``auth_request`` 是 ``async def``，而 ``mailer.send`` 内部是同步
+    ``httpx.post``（超时 10 秒）。直接调用会卡住事件循环，单 worker 下
+    所有并发请求一起排队——两封邮件就要 2 秒，而不是 1 秒。
+
+    注意必须用同一个事件循环并发：每个线程各起一个 ``TestClient`` 会
+    各自跑在独立循环里，阻塞不会互相影响，那样测不出问题。
+    """
+    import asyncio
+    import time
+
+    import httpx
+
+    clock = MutableClock()
+    app, _ = build_database_app(tmp_path, clock, [])
+
+    class SlowMailer:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def send(self, message) -> None:
+            self.calls += 1
+            time.sleep(1.0)
+
+    app.state.mailer = SlowMailer()
+
+    async def scenario() -> tuple[list[int], float]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            async def request_one(index: int) -> int:
+                response = await client.post(
+                    "/api/app/auth/request",
+                    json={
+                        "email": f"concurrent{index}@example.com",
+                        "display_name": "并发测试",
+                    },
+                )
+                return response.status_code
+
+            started = time.monotonic()
+            codes = await asyncio.gather(request_one(0), request_one(1))
+            return list(codes), time.monotonic() - started
+
+    codes, elapsed = asyncio.run(scenario())
+
+    assert all(code in {201, 400, 409, 429} for code in codes), codes
+    if all(code == 201 for code in codes):
+        assert app.state.mailer.calls == 2
+        # 两封邮件各睡 1 秒。串行（阻塞事件循环）至少 2 秒；
+        # 丢进线程池后重叠，约 1 秒。
+        assert elapsed < 1.8, f"发信阻塞了事件循环：{elapsed:.2f}s"
+
+
 def test_two_emails_are_isolated_in_database_mode(tmp_path):
     clock = MutableClock()
     app, _ = build_database_app(

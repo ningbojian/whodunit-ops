@@ -243,19 +243,25 @@ def merge_with_shadow(
         return private
     public = coerce_public_scripts(public_df)
 
-    private_keys: set[str] = set()
-    for _, row in private.iterrows():
-        key = _name_key(row.get("script_name"))
-        if key:
-            private_keys.add(key)
+    # 原来用 iterrows + to_dict("records") 逐行搬运 5809 条公共行，再
+    # pd.DataFrame(dicts) 重建，实测 214ms——而 find_scripts 本身只要 4ms。
+    # 这里改成「按 name_key 向量化过滤 + concat」，公共行原地保留 dtype，
+    # 不再逐格拆箱装箱。语义不变：只有在私有库里存在同名（非空 name_key）
+    # 时才丢弃该公共行。
+    private_keys = {
+        key
+        for key in (_name_key(name) for name in private["script_name"].tolist())
+        if key
+    }
+    if private_keys:
+        public_keys = public["script_name"].map(_name_key)
+        shadowed = public_keys.ne("") & public_keys.isin(private_keys)
+        public = public[~shadowed]
 
-    rows = private.to_dict("records")
-    for record in public.to_dict("records"):
-        key = _name_key(record.get("script_name"))
-        if key and key in private_keys:
-            continue
-        rows.append({col: record.get(col) for col in SCRIPTS_COLUMNS})
-    out = pd.DataFrame(rows, columns=SCRIPTS_COLUMNS)
+    out = pd.concat(
+        [private[SCRIPTS_COLUMNS], public[SCRIPTS_COLUMNS]],
+        ignore_index=True,
+    )
     return coerce_scripts(out)
 
 

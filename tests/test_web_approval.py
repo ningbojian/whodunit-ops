@@ -336,6 +336,26 @@ def test_ip_request_limit(tmp_path):
         assert "该网络" in response.text
 
 
+def test_ip_request_limit_survives_a_restart(tmp_path):
+    """限流键必须跨进程稳定，否则每次重启都能把每 IP 上限清零。
+
+    同一份环境变量 + 同一个状态库建两次应用，模拟一次重启。如果哪天有人
+    把密钥换成进程内随机值（例如 `secrets.token_hex()`），这条会失败。
+    """
+    clock = MutableClock()
+    first = build_app(
+        tmp_path, clock, RecordingEmailSender(), requests_per_ip_per_hour=1
+    )
+    with TestClient(first) as client:
+        assert request_access(client, email="one@example.com").status_code == 200
+
+    restarted = build_app(
+        tmp_path, clock, RecordingEmailSender(), requests_per_ip_per_hour=1
+    )
+    with TestClient(restarted) as client:
+        assert request_access(client, email="two@example.com").status_code == 429
+
+
 def test_invalid_email_and_missing_origin_do_not_create_request(tmp_path):
     clock = MutableClock()
     mailer = RecordingEmailSender()

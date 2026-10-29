@@ -322,6 +322,13 @@ def main(
             public_frame = frame
     except Exception:  # noqa: BLE001 - 公共库不可用不影响 CLI
         public_frame = None
+
+    # 全局剧名记忆：控制台走 Excel 文件后端，所以落 data_dir 下的 JSON
+    # sidecar，与网页版 Excel 模式落在同一个 data/script_aliases.json。
+    from app.store.script_aliases import build_script_aliases
+
+    script_aliases = build_script_aliases(uses_database=False, data_dir=data_dir)
+
     deps = AgentDeps(
         sessions_path=data_dir / "sessions.xlsx",
         bookings_path=data_dir / "bookings.xlsx",
@@ -329,6 +336,7 @@ def main(
         default_store=store_name,
         read_only=args.read_only,
         public_scripts=public_frame,
+        script_aliases=script_aliases,
     )
 
     extra_system_prompt = ""

@@ -388,3 +388,87 @@ def test_safe_trace_handles_malformed_and_extra_calls():
     assert trace[1]["ok"] is None
     assert trace[0]["tool"] == "a"
     assert trace[1]["tool"] == "b"
+
+
+def test_script_alias_memory_reaches_both_agent_deps_branches(tmp_path, monkeypatch):
+    """数据库 / Excel 两个分支都必须把剧名记忆注入 AgentDeps。
+
+    Excel 模式下 ``AgentDeps.store`` 为 None，记忆没法从 store 取，只能靠
+    显式注入；漏掉任何一支，remember 都会静默退化成 alias_memory_unavailable。
+    """
+    from types import SimpleNamespace
+
+    from app.web import runtime as runtime_module
+
+    clock = MutableClock()
+    settings = make_settings(tmp_path)
+    workspace = WorkspaceManager(
+        data_root=settings.data_root,
+        default_store=settings.default_store,
+        now_fn=clock.now,
+    )
+    memory = object()
+    runtime = ChatRuntime(
+        settings=settings,
+        model_provider=StaticModelProvider(
+            ScriptedChatModel(responses=[AIMessage(content="不应调用")])
+        ),
+        workspace=workspace,
+        usage=UsageStore(
+            tmp_path / "usage.sqlite3",
+            daily_limit=settings.max_turns_global_per_day,
+            now_fn=clock.now,
+        ),
+        now_fn=clock.now,
+        script_aliases=memory,
+    )
+
+    captured: list = []
+
+    def fake_build_agent(*, model, deps):
+        captured.append(deps)
+        return object()
+
+    monkeypatch.setattr(runtime_module, "build_agent", fake_build_agent)
+
+    excel_workspace = SimpleNamespace(
+        store=None,
+        sessions_path=tmp_path / "sessions.xlsx",
+        bookings_path=tmp_path / "bookings.xlsx",
+        scripts_path=tmp_path / "scripts.xlsx",
+    )
+    database_workspace = SimpleNamespace(store=object())
+
+    runtime._build_agent(excel_workspace, "abc123")
+    runtime._build_agent(database_workspace, "abc123")
+
+    assert len(captured) == 2
+    assert all(deps.script_aliases is memory for deps in captured)
+
+
+def test_create_app_puts_the_excel_alias_sidecar_in_the_shared_data_dir(tmp_path):
+    """Excel 模式下 create_app 要真的建出 JSON sidecar，且落点正确。
+
+    接错参数（例如把 ``data_root`` 本身而不是它的父目录传进去）不会报错，
+    只会把记忆写到 ``data/web_users/script_aliases.json``——那是一个每租户
+    目录的上一层之下的错误位置，分支测试看不出来，只有从 create_app 这层
+    看落点才能发现。
+    """
+    from app.store.script_aliases import JsonScriptAliasMemory
+    from app.web.main import create_app
+    from app.web.mailer import RecordingEmailSender
+
+    clock = MutableClock()
+    settings = make_settings(tmp_path)
+    app = create_app(
+        settings=settings,
+        mailer=RecordingEmailSender(),
+        model_provider=StaticModelProvider(
+            ScriptedChatModel(responses=[AIMessage(content="不应调用")])
+        ),
+        now_fn=clock.now,
+    )
+
+    memory = app.state.runtime._script_aliases
+    assert isinstance(memory, JsonScriptAliasMemory)
+    assert memory.path == tmp_path / "script_aliases.json"

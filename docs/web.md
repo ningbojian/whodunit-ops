@@ -11,7 +11,7 @@
    - 用户停留在 `/pending` 时每 3 秒轮询，批准后自动解锁；
    - 审批页同时显示备用链接 `/unlock?token=...`，关闭页面后可由开发者转发；备用链接在 8 小时内可重复打开，签发的会话到期时间相同。
 5. 8 小时后访问失效，接口返回 401，页面跳转 `/login?expired=1`；用户重新提交申请，开发者重新审批。
-6. 审批链接默认 24 小时有效且只能处理一次。轮换 `WEB_SESSION_SECRET` 会让所有已签发会话立即失效。
+6. 审批链接默认 24 小时有效且只能处理一次。轮换 `WEB_SESSION_SECRET` 会让所有已签发会话立即失效，并让当前这一小时的每 IP 申请计数归零（IP 限流键就是用它加盐的）。
 
 本地开发用 `EMAIL_BACKEND=console`，审批链接打印在服务端控制台，不联网。生产使用 Resend HTTPS API（`EMAIL_BACKEND=resend`），需要 `RESEND_API_KEY`。使用测试发件人 `onboarding@resend.dev` 时，`OWNER_EMAIL` 必须与 Resend 账号注册邮箱一致；否则 Resend 会拒绝发送。验证自有域名后可把 `EMAIL_FROM` 改为该域名。
 
@@ -21,6 +21,7 @@
 
 - 邮箱经 SHA-256 后取前 16 位作为租户 ID（`tenant_id = email_hash[:16]`）。数据库模式下，场次、预约、剧本都以 `tenant_id` 分区，所有查询由 `SqlStore` 强制带上租户条件；`tenants.email_hash` 保存完整 64 位哈希并加唯一约束。
 - 同一邮箱重新获批进入同一租户；不同邮箱互相不可见、不可写。请求体不接受邮箱、uid 或文件路径，身份只来自签名 Session。
+- **不按租户隔离的一共有五张表**，其中只有一张会写入用户产生的内容：`tenants`（鉴权元数据）、`access_requests`（审批申请与决定）、`usage_global_daily`（全站每日轮次计数）、`public_scripts`（运营方策展的只读剧本元数据），以及共享剧名记忆 `script_aliases`（无 `tenant_id`）。前四张都不含任何租户业务内容（`tenants` / `access_requests` 存的是鉴权元数据：邮箱哈希、称呼、审批状态、token 哈希，以及用于按 IP 限流的请求方 IP 哈希——这个哈希以 `WEB_SESSION_SECRET` 为密钥做 HMAC-SHA256，不是裸 SHA-256，否则库泄露后可以枚举 IPv4 反推地址；这次改动之前写入的行仍是旧的裸哈希，`--state-only` 导入会丢弃该字段，线上历史行的清理语句见 [部署](deployment.md#把本地-excel-导入-neon可选)）；`script_aliases` 在店长确认全名后记录一条「说法 → 公共库 `script_id`」，供全站检索复用。它不存对话正文、报价、排期或客户信息，也不含任何租户标识；只可能指向公共剧本库条目。登录页与对话页的隐私告知已如实写明这一点。
 - 如果两个不同完整哈希落到同一 16 位前缀，系统**拒绝创建或访问该租户**并报错，不共用数据（fail closed）。
 - 首次进入自动播种 4 个未来场次、2 条预约和 4 个同名剧本档案（演示时长是合成值），并尝试写入 3 个演示房间、3 个 DM、班次、阶段模板和演示分配；资源或模板播种失败不阻塞登录，可稍后在 `/resources` / `/stages` 手工补。数据库用 `tenants.seeded_at` 标记，播种在租户写锁内完成，只有一次；**已有数据绝不覆盖**。
 - Excel 兼容模式（`WEB_STORAGE_BACKEND=excel`）使用 `WEB_DATA_ROOT/users/<hash>/sessions.xlsx`、`bookings.xlsx` 与 `scripts.xlsx`，以 `.seeded` 文件保证幂等。该模式只用于本地开发与导入导出；**生产环境会被启动校验拒绝**，因为容器磁盘是临时的。
@@ -75,5 +76,6 @@ python -m app.web.main
 - 同日把 `.env` 切到 `EMAIL_BACKEND=resend`，提交申请后 Resend API 接受了发送请求，`OWNER_EMAIL` 收到了审批邮件；该验证未调用模型，也未做公网部署。
 - 同日完成真实 Neon + 真实 uvicorn 的 HTTP 验收（`EMAIL_BACKEND=console`，未调用模型）：`/healthz` 200 → 提交申请 303 → 待审批页 200 → 控制台审批链接 → 批准页 200 → 批准 200 → 访问状态 `approved/claimable` → 领取访问 200 → 看板 200 → `/api/sessions` 返回 4 场。对应租户在 Neon 中为 4 场次、2 条预约、4 个剧本；验收结束后已删除测试邮箱的审批记录与租户。
 - 控制台邮件在 Windows GBK 终端下曾因编码失败导致申请被标记为 `email_failed`，现已改为编码失败时降级输出并立即 flush，相关回归测试已加入。
+- 2026-10-29 本机 uvicorn 冒烟（`WEB_STORAGE_BACKEND=database` + 临时 SQLite，`DATABASE_URL` 置空，临时数据目录）：`/healthz` 200（`db` / `schema` / `model` 均为 `true`）→ `/login` 200；启动时 `ensure_schema` 建出含 `script_aliases` 在内的全部 19 张表。该验证只走到登录页，未提交申请、未调用模型。
 
 部署（Neon、Render、数据迁移）见 [部署](deployment.md)。

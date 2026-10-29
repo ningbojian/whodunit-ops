@@ -124,11 +124,14 @@ class AgentDeps:
     extraction_model: Any = None   # None -> extract_message 内部取默认模型
     copy_model: Any = None         # None -> generate_copy 内部取默认模型
     default_store: str | None = None
-    read_only: bool = False        # True -> store_data 三个写 action + script_library upsert 被拒绝
+    read_only: bool = False        # True -> store_data 三个写 action + script_library upsert/remember 被拒绝
     public_scripts: Any = None     # 公共库帧（只读）；None -> 仅私有库，行为与旧版一致
     tenant_id: str | None = None   # web_search 日配额的租户键；None -> "default"（CLI 单用户）
     search_usage: Any = None       # 配额计数器（Json/Sql SearchUsage）；None -> 工具内建 Excel sidecar
     web_search_provider: Any = None  # 注入 provider 测试；None -> 按 env 解析
+    # 全局剧名记忆（只存「说法 -> 公共库 script_id」）。只在正常匹配为空时点查，
+    # 从不参与打分；None -> 搜索行为与没有这个功能时完全一致。
+    script_aliases: Any = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +171,29 @@ def _public_shadow_warnings(deps: AgentDeps, script_name: Any) -> list[str]:
     if key in keys:
         return ["公共库已有同名条目；私有档案在检索与排期时会覆盖公共条目显示。"]
     return []
+
+
+def _candidate_warnings(items: Sequence[dict[str, Any]]) -> list[str]:
+    """给候选加「这不是确认过的记录」的说明。
+
+    ``find_scripts`` 每条结果都带 ``match_quality``，但模型看到的是一串
+    字段齐全的档案。不把弱匹配单独点出来，它就会当成已确认的剧本来用。
+    """
+    qualities = {item.get("match_quality") for item in items}
+    warnings: list[str] = []
+    if "learned" in qualities:
+        # 措辞只说「匹配不是按本店档案来的」，不说「结果不是本地档案」：
+        # 本店若有同名私有剧本，返回的那一条恰恰就是私有行。
+        warnings.append(
+            "有结果是通过其他门店确认过的剧名映射命中的，不是按本店档案"
+            "匹配出来的，请核对全名。"
+        )
+    if "suggested" in qualities:
+        warnings.append(
+            "有结果只是按字面相近猜出来的候选，不是确认过的匹配；"
+            "必须让店长确认全名后才能使用。"
+        )
+    return warnings
 
 
 # --- 工具返回里允许出现的字段 ---
@@ -1038,10 +1064,17 @@ def build_store_tools(deps: AgentDeps | None = None) -> list[BaseTool]:
         action 取值：
           search  按全名、别名或缩写找候选。参数：query, limit
                   返回剧本库 + 场次历史两类来源。**只查本地数据，不联网。**
+                  每条结果带 match_quality：exact / prefix / partial / loose
+                  是正常匹配；learned 是「其他门店确认过的说法」命中的；
+                  suggested 是按字面相近猜出来的**候选**，必须店长确认。
           get     按 script_id 取一条档案。参数：script_id
           upsert  新增或补齐档案。参数：script_id（补已有草稿时必带）、
                   script_name、aliases、script_type、total_seats、
                   duration_minutes、list_price、notes
+          remember 记录一条剧名映射（全站共享的公共记忆）。参数：query
+                  （店长最初用的那个说法）、script_id 或 script_name。
+                  **只在店长确认全名之后调用**，且只对公共库条目有效。
+                  记录内容是「说法 -> 公共库 script_id」，不含对话正文。
           list    列出剧本库。参数：limit
 
         重要规则：
@@ -1053,7 +1086,12 @@ def build_store_tools(deps: AgentDeps | None = None) -> list[BaseTool]:
             补全时带上返回的 script_id。
           - total_seats / duration_minutes / list_price 接受「8人」「4小时」
             「168元」这类写法，工具会解析。
-          - 只读模式下 upsert 返回 error_code=read_only。
+          - 只读模式下 upsert / remember 返回 error_code=read_only。
+          - remember 不是「模糊匹配设置」：它记的是**精确键 → 公共库条目**，
+            只有在店长指认全名之后才有意义。未经确认不得调用。
+            被拒（not_similar / sensitive_query / collides_with_other /
+            ambiguous_query / alias_quota_exceeded）说明这个说法没法当别名
+            存，如实告诉店长没记上即可，**不要改写说法后再试一次**。
         """
         try:
             limit_value = max(1, min(int(limit), 50))
@@ -1069,8 +1107,17 @@ def build_store_tools(deps: AgentDeps | None = None) -> list[BaseTool]:
                 limit=limit_value,
                 store=store,
                 public=deps.public_scripts,
+                learned_aliases=deps.script_aliases,
             )
-            warnings = []
+            qualities = {item.get("match_quality") for item in items}
+            warnings = _candidate_warnings(items)
+            if "loose" in qualities and items and any(
+                quality in {"learned", "suggested"} for quality in qualities
+            ):
+                warnings.append(
+                    "结果里既有「查询里含某个短剧名」的弱匹配，也有另外的候选；"
+                    "弱匹配不等于店长要找的那个本。"
+                )
             if not items:
                 warnings.append(
                     "本地剧本库和场次历史都没有匹配。可以联想候选，"
@@ -1096,11 +1143,16 @@ def build_store_tools(deps: AgentDeps | None = None) -> list[BaseTool]:
                     limit=5,
                     store=store,
                     public=deps.public_scripts,
+                    learned_aliases=deps.script_aliases,
                 )
+                # 这些是候选，不是档案。不带标记地塞进 data 里，模型会把
+                # script_id / read_only / profile_status 当成已确认记录。
+                warnings = _candidate_warnings(suggestions)
                 return _err(
                     "script_not_found",
                     f"剧本库没有找到 {key}。",
                     data={"suggestions": suggestions},
+                    warnings=warnings,
                 )
             return _ok({"script": item})
 
@@ -1147,9 +1199,89 @@ def build_store_tools(deps: AgentDeps | None = None) -> list[BaseTool]:
             )
             return _ok({"count": len(items), "scripts": items})
 
+        if action == "remember":
+            if deps.read_only:
+                return _err(
+                    "read_only",
+                    "只读模式：已拒绝 remember，未写入剧名记忆。",
+                )
+            memory = deps.script_aliases
+            if memory is None:
+                return _err(
+                    "alias_memory_unavailable",
+                    "剧名记忆未启用，本次未记录（不影响检索，也不会报错）。",
+                )
+            public = deps.public_scripts
+            if public is None or getattr(public, "empty", True):
+                return _err(
+                    "public_library_unavailable",
+                    "公共剧本库不可用，暂不能记录剧名映射。",
+                )
+            # 按名解析要读这两列；缺列时应当报「库不可用」，而不是让
+            # pandas 抛 KeyError 冒到 ReAct 循环里。
+            if "script_id" not in public.columns or "script_name" not in public.columns:
+                return _err(
+                    "public_library_unavailable",
+                    "公共剧本库缺少必要列，暂不能记录剧名映射。",
+                )
+
+            spoken = str(query or "").strip()
+            if not spoken:
+                return _err(
+                    "bad_request",
+                    "remember 需要 query：店长最初说的那个说法。",
+                )
+
+            target = str(script_id or "").strip()
+            if not target:
+                # 模型手里通常是名字不是 pub id。允许按名解析，但必须唯一；
+                # 同名多行时让它先 search，避免把映射记到错的那一条。
+                from app.tools.scripts import normalize_script_name
+
+                wanted = normalize_script_name(script_name).casefold()
+                if not wanted:
+                    return _err(
+                        "bad_request", "remember 需要 script_id 或 script_name。"
+                    )
+                ids = public["script_id"].astype("string").fillna("").tolist()
+                names = public["script_name"].tolist()
+                matches = [
+                    str(sid)
+                    for sid, name in zip(ids, names)
+                    if normalize_script_name(name).casefold() == wanted
+                ]
+                if len(matches) != 1:
+                    return _err(
+                        "script_not_public",
+                        "公共库里找不到唯一的同名剧本，请先 search 确认 script_id。",
+                    )
+                target = matches[0]
+
+            from app.store.script_aliases import AliasRejected, AliasUnavailable
+
+            try:
+                result = memory.remember(
+                    spoken, target, public_frame=deps.public_scripts
+                )
+            except AliasRejected as exc:
+                return _err(exc.code, exc.message)
+            except AliasUnavailable as exc:
+                return _err("alias_memory_unavailable", str(exc))
+
+            if result.get("created"):
+                warnings = [
+                    "已记录为全站共享的剧名映射：只含剧名，不含对话、"
+                    "报价、排期或客户信息。"
+                ]
+            else:
+                # 先写者胜。绝不透露「别的门店已经映射过」——那本身就是
+                # 跨租户推断通道。
+                warnings = ["这个说法此前已有记录，本次未改动。"]
+            return _ok(result, warnings)
+
         return _err(
             "bad_request",
-            f"未知 action：{action}。可用值：search / get / upsert / list。",
+            f"未知 action：{action}。可用值：search / get / upsert / remember / list。",
         )
 
     # ------------------------------------------------------------------
@@ -1570,10 +1702,11 @@ SYSTEM_PROMPT = """你是剧本杀门店的私域运营助手，服务对象是�
 【总规则】
 1. 所有场次、预约、价格、风险事实必须来自工具返回。不要凭记忆或猜测补全。
 2. 写操作（upsert_sessions / record_booking / cancel_booking / script_library upsert /
-   store_data 的建场与修正 / manage_resources / schedule_sessions 写 action）
+   script_library remember / store_data 的建场与修正 / manage_resources / schedule_sessions 写 action）
    只在店长明确要求录入、预约、跳车、加剧本、补资源或确认排期时执行。
    店长转发拼场广告，视为要求录入；转发预约 / 跳车消息，视为要求更新预约。
    追问时先问最关键的一项，不要一次逼店长补完所有字段。
+   remember 例外地只在「店长已经确认过全名」之后才允许调用，见第 9 条。
 3. 工具返回 ok=false 时，如实转述 error_code 和 error，不要假装成功；同一个失败不要连续重试超过一次。
 4. 不编造场次、玩家、价格、地址、联系方式、赠品、活动或「保证成团」。
 5. 金额、时间、人数以工具结果为准。不要自己计算折扣、改价或补人数。
@@ -1587,6 +1720,10 @@ SYSTEM_PROMPT = """你是剧本杀门店的私域运营助手，服务对象是�
    本地 search 没有结果，也要明确说「本地没查到」，不要伪造搜索结果。
    场次录入的唯一候选匹配（script_match=unique）来自剧本库，不算猜测，可直接建场，
    但要把规范全名回读给店长核对。
+   店长确认的全名若属于公共库（script_id 以 pub- 开头），确认之后再调一次
+   script_library(action="remember", query=店长最初用的说法, script_id=…)。
+   这一步只是把「他这么拼 → 这个本」记下来供全站检索，不写档案、不写场次；
+   未确认前不许调用，也不要拿它当模糊搜索使用。
 10. 场次录入允许信息不完整。硬必填只有剧本全名和开场时间；
     这两项齐全就直接建场，不要求人数 / 价格 / 类型 / 时长；
     缺任意一项硬必填时只追问最关键的一项，不落任何数据，也不要把缺失项一次列完。
@@ -1631,8 +1768,13 @@ E. 店长说剧本缩写 / 要加剧本：
    1) 先 script_library(action="search", query=店长说的缩写或名称)；
    2) 有本地匹配：列出全名、别名、当前缺失字段，问店长选哪个；
       店长确认后，用返回的 script_id 调 script_library(action="upsert") 补全。
+      若这条是公共库条目（script_id 以 pub- 开头），再补一次
+      script_library(action="remember", query=店长最初的说法, script_id=…)。
    3) 本地没有匹配：可以说「我猜是《…》」，但必须标明是猜测并等店长确认；
       店长确认全名后，再 upsert；店长否定时，问正确全名，不要硬写。
+      确认的是公共库条目时同样补一次 remember。
+      若 search 返回的是 match_quality=suggested 的候选，要明确说「这是按字面
+      相近猜的」，不得直接当成已确认结果；确认后 remember 才有意义。
    4) 店长要加剧本时，即使只说了全名或缩写，也先把已知信息 upsert 成草稿；
       然后根据返回的 missing_fields 只问一个最关键的问题。
       后续每轮都带上 script_id 继续补，不要把已保存字段再问一遍。

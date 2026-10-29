@@ -41,6 +41,7 @@ from app.web.access import (
 from app.web.security import (
     constant_time_equal,
     email_hash as hash_email,
+    hash_ip,
     hash_token,
     new_token,
     normalize_display_name,
@@ -59,9 +60,13 @@ class DatabaseAccessStore:
         engine: Engine,
         *,
         now_fn: Callable[[], datetime] | None = None,
+        ip_hash_secret: str,
     ) -> None:
+        if not isinstance(ip_hash_secret, str) or not ip_hash_secret:
+            raise ValueError("ip_hash_secret 不能为空")
         self.engine = engine
         self._now_fn = now_fn or (lambda: datetime.now(UTC))
+        self._ip_hash_secret = ip_hash_secret
         self._lock = threading.RLock()
         self._postgres = engine.dialect.name == "postgresql"
 
@@ -203,7 +208,7 @@ class DatabaseAccessStore:
         email_hash_value = hash_email(normalized)
         browser_hash = hash_token(browser_token)
         ip_hash_value = (
-            hash_token(requester_ip.strip())
+            hash_ip(requester_ip.strip(), self._ip_hash_secret)
             if isinstance(requester_ip, str) and requester_ip.strip()
             else None
         )

@@ -97,7 +97,9 @@ def test_postgres_roundtrip(engine, tenant_id):
 def test_postgres_state_stores(engine):
     clock = lambda: datetime(2026, 10, 20, 4, 0, tzinfo=UTC)
     email = f"user-{uuid.uuid4().hex}@example.com"
-    access = DatabaseAccessStore(engine, now_fn=clock)
+    access = DatabaseAccessStore(
+        engine, now_fn=clock, ip_hash_secret="test-ip-secret"
+    )
     try:
         created = access.create_request(
             email,

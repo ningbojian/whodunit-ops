@@ -11,13 +11,17 @@
   - 允许先保存残缺档案：只要知道全名或至少一个别名，就能先落一条草稿；
     必填字段缺失时返回 missing_fields，下一次带上 script_id 继续补。
   - 缩写候选会合并「剧本库」与「场次历史」两类来源；场次历史只读，不写回。
-  - 剧本名称只做空白折叠和大小写归一，不做拼音/模糊匹配；缩写联想交给
-    Agent 的模型，最终仍要店长确认，避免把「年轮」和「年轮（情感本）」混在一起。
+  - 剧本名称只做空白折叠和大小写归一，不做拼音匹配。正常匹配（精确/前缀/
+    互相包含）**命中就返回**；一条都没有时才走兜底：先查「确认过的全局
+    剧名映射」，再给字符 bigram 近似候选。兜底结果一律带
+    ``match_quality``，模型据此知道该不该先请店长确认，避免把「年轮」和
+    「年轮（情感本）」当成同一个本。
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import secrets
@@ -74,6 +78,23 @@ _MAX_ALIASES = 12
 _MAX_TYPE = 40
 _MAX_NOTES = 500
 _MAX_SOURCE = 4000
+
+# 兜底候选最多给几条：再多多半是噪声，模型也没法逐条找店长确认。
+_FALLBACK_LIMIT = 3
+# 字符 bigram 重叠系数的下限。低于它基本只是「碰巧共用一个字」。
+_SUGGEST_THRESHOLD = 0.5
+# 至少共享这么多个 bigram 才考虑。只共用一个字的短名靠 1/2 = 0.5 就能
+# 混进候选列表，而它和查询没有任何连续两字的相似片段。
+_SUGGEST_MIN_OVERLAP = 2
+# 查询短于 3 个字时 bigram 不可靠（《青搂》与《青楼》零交集），
+# 宁可返回空也不给一串假候选。
+_SUGGEST_MIN_QUERY = 3
+
+logger = logging.getLogger(__name__)
+
+# 正常匹配的 score → 给模型看的匹配强度。兜底的两种另有取值：
+# learned（命中全局记忆）、suggested（bigram 猜的）、list（空查询）。
+_QUALITY_BY_SCORE = ("exact", "prefix", "partial", "loose")
 
 
 def _empty_scripts() -> pd.DataFrame:
@@ -424,6 +445,32 @@ def _session_history(sessions: pd.DataFrame | None) -> list[dict[str, Any]]:
     return out
 
 
+def _score_keys(query_key: str, keys: list[str]) -> int | None:
+    """按已归一化的名字/别名键打分。
+
+    ``_match_score`` 的对偶版本：调用方已经算好 keys 时用它，避免重复
+    归一化。四档口径（0 精确 / 1 名字以查询开头 / 2 查询是名字的一段 /
+    3 名字是查询的一段）必须与 ``_match_score`` 保持逐条一致，改动时
+    两处一起改。
+    """
+    if not query_key:
+        return 0
+    if not keys:
+        return None
+    if query_key in keys:
+        return 0
+    if any(key.startswith(query_key) for key in keys):
+        return 1
+    if any(query_key in key for key in keys):
+        return 2
+    # 单字名不参与「名字 ⊂ 查询」这一档：库里有 49 个单字本名，任何长查询
+    # 只要含那个字就会被判成 loose 命中（实测「病娇男孩的精分曰记」被
+    # 「病」抢走，真名反而轮不到兜底）。单字查询仍可用第 0/1 档精确命中。
+    if any(len(key) >= 2 and key in query_key for key in keys):
+        return 3
+    return None
+
+
 def _match_score(query_key: str, candidate: dict[str, Any]) -> int | None:
     if not query_key:
         return 0
@@ -438,9 +485,167 @@ def _match_score(query_key: str, candidate: dict[str, Any]) -> int | None:
         return 1
     if any(query_key in key for key in keys):
         return 2
-    if any(key in query_key for key in keys):
+    # 与 _score_keys 保持一致：单字名不参与「名字 ⊂ 查询」这一档。
+    if any(len(key) >= 2 and key in query_key for key in keys):
         return 3
     return None
+
+
+def _bigrams(text: str) -> set[str]:
+    """相邻两字组成的集合；单字文本没有 bigram，返回空集。"""
+    if len(text) < 2:
+        return set()
+    return {text[i : i + 2] for i in range(len(text) - 1)}
+
+
+def _suggest_scripts(
+    query_key: str,
+    *,
+    frame: pd.DataFrame,
+    candidates: list[tuple[int, str, list[str], int]],
+    limit: int,
+    exclude: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """字符 bigram 近似候选；只用于「一条都没匹配上」的情况。
+
+    相似度用重叠系数 ``|交集| / min(|A|,|B|)``，另加一条「至少共享 2 个
+    bigram」。这两条一起用是量出来的，不是推出来的：拿真实库 5,809 行里
+    的 429 个剧名各改一个字，只靠比例的话，只共用一个 bigram 的短名会把
+    错条目塞进候选（135 → 192 条）；加上「至少 2 个」后噪声回到 135 条，
+    召回不变。
+
+    分母**不能**换成 max。max 更干净（93 条错条目），但它把「店长把 8 字
+    全名缩成 4 字、还打错一个字」整类挡在门外——254 个「简称 + 错字」的
+    查询里一个都兜不住（0/254），而下面这套兜住 177 个。简称本来就是店长
+    最常用的口径，丢了它兜底就没有意义了。
+
+    排序在分数之后比「与查询的字数差」，而不是按名字字母序：同分时应当
+    先看更像同一条目的那个，字母序只是噪声。
+
+    查询短于 3 个字直接放弃。实测《青搂》与《青楼》的 bigram 零交集，
+    退化成单字比对会产生几十条误报，真名还排不进前四——给一串假候选
+    比说「没找到」更糟。这类短名的错拼交给全局剧名记忆。
+
+    候选池只含剧本库（私有 + 公共帧），**不含场次历史**：那部分条目在
+    正常匹配阶段已经参与打分了，而且没有 ``frame.iloc[position]`` 可定位。
+    只出现在某场历史里的名字打错字时，这里给不出候选。
+
+    ``exclude`` 是已经出现在结果里的 name_key（loose 行）。必须在**截断
+    之前**排除：名字是查询子串的条目重叠系数恒为 1.0，排序上永远压过真正
+    打错字的目标；3 个名额一旦被它们占满，去重阶段再删掉，候选就一条不剩。
+    """
+    if len(query_key) < _SUGGEST_MIN_QUERY:
+        return []
+    query_grams = _bigrams(query_key)
+    if not query_grams:
+        return []
+
+    scored: list[tuple[float, int, str, int]] = []
+    for position, name_key, keys, name_len in candidates:
+        if exclude and name_key in exclude:
+            continue
+        best = 0.0
+        for key in keys:
+            grams = _bigrams(key)
+            if not grams:
+                continue
+            overlap = len(query_grams & grams)
+            if overlap < _SUGGEST_MIN_OVERLAP:
+                continue
+            best = max(best, overlap / min(len(query_grams), len(grams)))
+        if best < _SUGGEST_THRESHOLD:
+            continue
+        scored.append((best, abs(name_len - len(query_key)), name_key, position))
+
+    scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+    out: list[dict[str, Any]] = []
+    for _, _, _, position in scored[: min(_FALLBACK_LIMIT, limit)]:
+        item = _annotate_source(script_to_dict(frame.iloc[position]))
+        item["match_quality"] = "suggested"
+        out.append(item)
+    return out
+
+
+def _learned_script(
+    query_key: str,
+    *,
+    frame: pd.DataFrame,
+    public: pd.DataFrame | None,
+    learned_aliases: Any,
+) -> dict[str, Any] | None:
+    """查全局学到的剧名映射；查不到或任何异常都返回 None。
+
+    映射只可能指向公共行，但本店可能用同名私有档案遮蔽了那条公共行。
+    所以不能直接按 ``script_id`` 取行（遮蔽后就取不到了），而是先拿到
+    公共行的名字，再按 name_key 在**合并后的帧**里解析——这样私有档案
+    才会按既有规则赢。
+    """
+    if learned_aliases is None:
+        return None
+    try:
+        script_id = learned_aliases.lookup(query_key)
+    except Exception as exc:  # noqa: BLE001 - 记忆不可用不该让搜索失败
+        logger.warning("learned alias lookup failed: %s", type(exc).__name__)
+        return None
+    if not script_id:
+        return None
+    if public is None or getattr(public, "empty", True):
+        return None
+    if "script_id" not in public.columns or "script_name" not in public.columns:
+        return None
+    hit = public[public["script_id"].astype("string").fillna("") == script_id]
+    if hit.empty:
+        return None
+    key = _name_key(hit.iloc[0].get("script_name"))
+    if not key or frame.empty or "script_name" not in frame.columns:
+        return None
+    for position, name in enumerate(frame["script_name"].tolist()):
+        if _name_key(name) == key:
+            item = _annotate_source(script_to_dict(frame.iloc[position]))
+            item["match_quality"] = "learned"
+            return item
+    return None
+
+
+def _fallback_scripts(
+    query_key: str,
+    *,
+    frame: pd.DataFrame,
+    candidates: list[tuple[int, str, list[str], int]],
+    limit: int,
+    public: pd.DataFrame | None,
+    learned_aliases: Any,
+    exclude: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """正常匹配为空时的兜底：先查全局记忆，再给 bigram 近似候选。
+
+    整个兜底是一次「额外线索」，不是搜索本身：内部吞掉异常并记一行
+    warning。记忆或公共库出问题应当表现为少一条线索，而不是搜索报错。
+
+    ``exclude`` 只影响 bigram 候选——它们是猜的，不该重复已经在结果里的
+    条目，也不该为了给它们腾位置去挤掉真实命中。
+    """
+    if not query_key:
+        return []
+    try:
+        learned = _learned_script(
+            query_key,
+            frame=frame,
+            public=public,
+            learned_aliases=learned_aliases,
+        )
+        if learned is not None:
+            return [learned]
+        return _suggest_scripts(
+            query_key,
+            frame=frame,
+            candidates=candidates,
+            limit=limit,
+            exclude=exclude,
+        )
+    except Exception as exc:  # noqa: BLE001 - 兜底不该让搜索失败
+        logger.warning("script fallback failed: %s", type(exc).__name__)
+        return []
 
 
 def _merged_with_public(
@@ -479,11 +684,21 @@ def find_scripts(
     limit: int = 10,
     store: Any = None,
     public: pd.DataFrame | None = None,
+    learned_aliases: Any = None,
 ) -> list[dict[str, Any]]:
     """在剧本库和场次历史里找候选；不联网、不猜全名。
 
     public 提供时与私有库合并（同 name_key 私有遮蔽公共）；
     公共行 source="公共库"、read_only=True。upsert 永远只写私有库。
+
+    ``learned_aliases`` 是全局剧名记忆（有 ``lookup(key) -> script_id | None``
+    的任意对象，见 app/store/script_aliases.py）。它**只在正常匹配为空时**
+    被查询一次，绝不并进候选的别名列表——否则学到的键可能让某个本在
+    ``(score, name_len, name_key)`` 排序里顶掉真正的精确命中。
+
+    每条结果都带 ``match_quality``：``exact`` / ``prefix`` / ``partial`` /
+    ``loose`` 表示正常匹配的强弱，``learned`` 表示命中全局记忆，
+    ``suggested`` 表示 bigram 猜的候选，``list`` 表示空查询的列表输出。
     """
     frame = (
         load_scripts(path, store=store)
@@ -494,32 +709,134 @@ def find_scripts(
     limit = max(1, min(int(limit), 50))
     query_key = _name_key(query)
 
-    candidates: list[dict[str, Any]] = []
+    candidates: list[tuple[int, str, list[str], int]] = []
     library_names: set[str] = set()
-    for _, row in frame.iterrows():
-        item = _annotate_source(script_to_dict(row))
-        key = _name_key(item.get("script_name"))
+    # 打分和排序只需要「名字 + 别名 + 名字长度」，完整档案等条目进了
+    # 结果集再造。原实现给全部 5809 行都跑 script_to_dict（每行十几次
+    # 字段归一化），实测 309ms，而最终最多只返回 limit（≤50）条。
+    #
+    # 按列取值而不是 to_dict("records")：后者要把 13 列全部转成 Python
+    # 原生对象（每格一次 maybe_box_native，含 Timestamp 拆箱），实测
+    # 96.7ms；这里只碰 2 列，1.4ms。
+    # 两个列表保持与 frame 同长，缺列时也能逐行对齐。
+    names = (
+        frame["script_name"].tolist()
+        if "script_name" in frame.columns
+        else [None] * len(frame)
+    )
+    aliases_col = (
+        frame["aliases"].tolist()
+        if "aliases" in frame.columns
+        else [None] * len(frame)
+    )
+    for position, (name, raw_aliases) in enumerate(zip(names, aliases_col)):
+        key = _name_key(name)
         if key:
             library_names.add(key)
-        candidates.append(item)
+        keys = [key] if key else []
+        for alias in split_aliases(raw_aliases):
+            alias_key = _name_key(alias)
+            if alias_key:
+                keys.append(alias_key)
+        name_len = len(name) if isinstance(name, str) else 0
+        candidates.append((position, key, keys, name_len))
 
+    matched: list[tuple[int, int, str, Any, bool]] = []
+    for position, name_key, keys, name_len in candidates:
+        score = _score_keys(query_key, keys)
+        if score is None:
+            continue
+        matched.append((score, name_len, name_key, position, False))
     for item in _session_history(
         sessions if sessions is not None else load_sessions(store=store)
     ):
         key = _name_key(item.get("script_name"))
         if key and key not in library_names:
-            candidates.append(item)
-
-    matched: list[tuple[int, int, str, dict[str, Any]]] = []
-    for item in candidates:
-        score = _match_score(query_key, item)
-        if score is None:
-            continue
-        name = item.get("script_name") or ""
-        matched.append((score, len(name), _name_key(name), item))
+            score = _match_score(query_key, item)
+            if score is None:
+                continue
+            name = item.get("script_name") or ""
+            # 场次历史条目已是完整记录（带 source="场次历史"），不再过
+            # script_to_dict / _annotate_source，否则来源会被改成「剧本库」。
+            matched.append((score, len(name), key, item, True))
 
     matched.sort(key=lambda item: (item[0], item[1], item[2]))
-    return [item[3] for item in matched[:limit]]
+    # 只有进入结果集的条目才需要完整档案：逐行取 Series（script_to_dict
+    # 本来就支持 Series），最多 limit 次，而不是给全表建 dict。
+    out: list[dict[str, Any]] = []
+    for score, _, _, row_index, is_history in matched[:limit]:
+        # 空查询的 score 恒为 0，不能据此标成 exact，否则模型会误以为
+        # 「这就是精确命中」。
+        quality = "list" if not query_key else _QUALITY_BY_SCORE[score]
+        if is_history:
+            # 复制而不是原地改：这些 dict 来自调用方传入的场次记录。
+            out.append(dict(row_index, match_quality=quality))
+        else:
+            item = _annotate_source(script_to_dict(frame.iloc[row_index]))
+            item["match_quality"] = quality
+            out.append(item)
+    if out:
+        # 全是 loose 的时候补一次兜底。score 3 只说明「查询里夹着这个短剧名」，
+        # 长查询里恰好含一个 2–3 字本名时，真正的目标（很可能打错一个字）
+        # 永远轮不到候选——库里有《病》和《病娇男孩的精分日记》时，「病娇
+        # 男孩的精分曰记」会先被《病》按 loose 命中。单字名已排除在这档外，
+        # 2–3 字名没有。只在「一条像样的匹配都没有」时才跑，仍是低频路径。
+        #
+        # 不按 ``len(out) < limit`` 设门：loose 行凑满名额时，恰恰是最需要
+        # 兜底的场合（5 个两字本被一段长查询同时 loose 命中）。学到的命中
+        # 排在 loose 行前面——它是整串查询的精确键；bigram 候选仍排在后面，
+        # 它是猜的，不该顶掉一个真实存在的短名命中。
+        if query_key and all(
+            item.get("match_quality") == "loose" for item in out
+        ):
+            extra = _fallback_scripts(
+                query_key,
+                frame=frame,
+                candidates=candidates,
+                limit=limit,
+                public=public,
+                learned_aliases=learned_aliases,
+                # 已经在结果里的名字不参与候选打分：它们是「查询里夹着的
+                # 短剧名」，bigram 重叠恒为 1.0，会把 3 个名额全占满。
+                exclude={
+                    key
+                    for key in (
+                        _name_key(item.get("script_name")) for item in out
+                    )
+                    if key
+                },
+            )
+            if extra:
+                learned_rows = [
+                    item
+                    for item in extra
+                    if item.get("match_quality") == "learned"
+                ]
+                guessed_rows = [
+                    item
+                    for item in extra
+                    if item.get("match_quality") != "learned"
+                ]
+                seen = set()
+                merged: list[dict[str, Any]] = []
+                for item in [*learned_rows, *out, *guessed_rows]:
+                    name_key = _name_key(item.get("script_name"))
+                    if name_key and name_key in seen:
+                        continue
+                    seen.add(name_key)
+                    merged.append(item)
+                out = merged[:limit]
+        return out
+    # 一条都没匹配上才走兜底。兜底只读，且内部吞掉异常：记忆或公共库
+    # 出问题应当是「搜不到额外线索」，而不是搜索报错。
+    return _fallback_scripts(
+        query_key,
+        frame=frame,
+        candidates=candidates,
+        limit=limit,
+        public=public,
+        learned_aliases=learned_aliases,
+    )
 
 
 def get_script(
@@ -829,6 +1146,8 @@ def list_scripts(
         return []
     limit = max(1, min(int(limit), 100))
     frame = frame.sort_values(["script_name", "script_id"], na_position="last")
+    # 同 find_scripts：整批转换，避免 iterrows 逐行构造 Series。
     return [
-        _annotate_source(script_to_dict(row)) for _, row in frame.head(limit).iterrows()
+        _annotate_source(script_to_dict(record))
+        for record in frame.head(limit).to_dict("records")
     ]

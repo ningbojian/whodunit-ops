@@ -187,6 +187,29 @@ Index(
     sqlite_where=_public_name_not_blank,
 )
 
+# 全局剧名记忆：只记「用户怎么拼这个名字 → 对应哪条公共行」。
+#
+# 写入路径只有一条：店长在对话里确认全名后，由 script_library(action="remember")
+# 显式调用（见 app/agent.py）。不存对话正文、不存业务数据、不存 tenant_id，
+# 且 query_key 必须与目标本名足够相近才会被接受（见 app/store/script_aliases.py），
+# 所以这张表只能表达「这个本还可以怎么拼」，表达不了别的东西。
+#
+# 故意**不建外键**指向 public_scripts：公共库导入走的是 DELETE 全表再重插
+# （app/store/public_sql.py:_write_all），CASCADE 会在每次导入时清空全部学习
+# 结果，RESTRICT 又会让导入直接失败。存在性改由应用层校验。
+#
+# 时间列用 DateTime（不是 UTCDateTime）：写入走的是原始 text() SQL，绕过了
+# 类型绑定，UTCDateTime 在 SQLite 上「存 naive UTC、读回转 aware」的转换
+# 根本不会发生。这里与同样用原始 SQL 写的 search_usage_daily 保持一致。
+script_aliases = Table(
+    "script_aliases",
+    metadata,
+    Column("query_key", String(80), primary_key=True),
+    Column("script_id", String(64), nullable=False),
+    Column("created_at", DateTime(timezone=False), nullable=False),
+    Column("updated_at", DateTime(timezone=False), nullable=False),
+)
+
 # web_search 多租户日配额计数（每租户每天一行；全局配额可由 SUM 求得）。
 search_usage_daily = Table(
     "search_usage_daily",
@@ -534,6 +557,7 @@ ALL_TABLES: tuple[Table, ...] = (
     bookings,
     scripts,
     public_scripts,
+    script_aliases,
     search_usage_daily,
     access_requests,
     usage_global_daily,
@@ -565,6 +589,7 @@ __all__ = [
     "metadata",
     "public_scripts",
     "rooms",
+    "script_aliases",
     "script_stages",
     "scripts",
     "search_usage_daily",

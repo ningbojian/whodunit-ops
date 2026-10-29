@@ -229,7 +229,9 @@ def create_app(
             # 不打印连接串或密码；traceback 里 SQLAlchemy 会自动隐藏密码。
             # 进程仍启动，健康检查返回 503，而不是静默回退到 Excel。
             logger.exception("database schema init failed: %s", type(exc).__name__)
-        access_store = DatabaseAccessStore(engine, now_fn=clock)
+        access_store = DatabaseAccessStore(
+            engine, now_fn=clock, ip_hash_secret=config.session_secret
+        )
         usage = DatabaseUsageStore(
             engine,
             daily_limit=config.max_turns_global_per_day,
@@ -241,7 +243,9 @@ def create_app(
             now_fn=clock,
         )
     else:
-        access_store = AccessStore(config.state_db, now_fn=clock)
+        access_store = AccessStore(
+            config.state_db, now_fn=clock, ip_hash_secret=config.session_secret
+        )
         usage = UsageStore(
             config.state_db,
             daily_limit=config.max_turns_global_per_day,
@@ -272,6 +276,20 @@ def create_app(
         engine=engine,
         data_dir=config.data_root.parent,
     )
+    # 公共库帧缓存：OperationsService 与 ChatRuntime 共用一个实例。
+    # 没有它的话每个页面请求、每个用户 Agent 都会把 5809 行整表重读一遍。
+    from app.web.public_cache import PublicScriptsCache
+
+    public_cache = PublicScriptsCache(public_library)
+    # 全局剧名记忆：数据库模式是全局表，Excel 模式是 data 根目录下的 sidecar JSON。
+    # 只在店长确认全名后写入，读路径只在正常匹配为空时点查一次（无缓存）。
+    from app.store.script_aliases import build_script_aliases
+
+    script_aliases = build_script_aliases(
+        uses_database=config.uses_database,
+        engine=engine,
+        data_dir=config.data_root.parent,
+    )
     sender = mailer or build_email_sender(config)
     runtime = ChatRuntime(
         settings=config,
@@ -281,12 +299,15 @@ def create_app(
         now_fn=clock,
         public_library=public_library,
         search_usage=search_usage,
+        public_cache=public_cache,
+        script_aliases=script_aliases,
     )
     operations = OperationsService(
         settings=config,
         workspace=workspace,
         now_fn=clock,
         public_library=public_library,
+        public_cache=public_cache,
     )
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 

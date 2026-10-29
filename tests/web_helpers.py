@@ -68,8 +68,11 @@ def make_store(
     clock: MutableClock,
     *,
     name: str = "access.sqlite3",
+    ip_hash_secret: str = "test-ip-secret",
 ) -> AccessStore:
-    return AccessStore(tmp_path / name, now_fn=clock.now)
+    return AccessStore(
+        tmp_path / name, now_fn=clock.now, ip_hash_secret=ip_hash_secret
+    )
 
 
 def env_base(**overrides) -> dict[str, str]:

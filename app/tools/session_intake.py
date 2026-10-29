@@ -152,7 +152,13 @@ def _match_script(
     name: str,
     scripts: pd.DataFrame,
 ) -> tuple[str, dict[str, Any] | None, str, list[dict[str, Any]]]:
-    """返回 (match_type, 命中档案, 规范名, 候选)。"""
+    """返回 (match_type, 命中档案, 规范名, 候选)。
+
+    这里**不查**全局剧名记忆（``script_aliases``）。那张表是「别人确认过的
+    说法」，用在检索上会带警告；而建场会把匹配到的名字当成正式剧名写进
+    场次，等于拿一条未经本店核对的映射静默改名。打错的名字原样落库、
+    由店长改场次字段，比悄悄改成另一个本安全。
+    """
     key = normalize_script_name(name).casefold()
     if not key or scripts.empty:
         return "none", None, name, []
@@ -180,8 +186,14 @@ def _match_script(
                 normalize_script_name(alias).casefold()
                 for alias in split_aliases(row.get("aliases"))
             ]
-            if key in full_key or full_key in key or any(
-                key in alias or alias in key for alias in alias_keys if alias
+            # 「名字 ⊂ 查询」这一档要求名字至少 2 个字。公共库里有 49 个单字
+            # 本名（《病》《囚》…），任何含那个字的长查询都会被它们命中；而
+            # 唯一候选会被当场提升成正式剧名，等于把《病娇男孩的精分日记》
+            # 静默改写成《病》。与 find_scripts._score_keys 的同一条规则一致。
+            if key in full_key or (len(full_key) >= 2 and full_key in key) or any(
+                key in alias or (len(alias) >= 2 and alias in key)
+                for alias in alias_keys
+                if alias
             ):
                 distance = abs(len(full_key) - len(key))
                 candidates.append((distance, len(full_key), row.to_dict()))

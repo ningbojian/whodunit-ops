@@ -321,6 +321,27 @@ def test_public_unique_candidate_borrows_metadata(store):
     assert result["session"]["script_type"] == "情感"
 
 
+def test_single_character_title_cannot_hijack_a_long_misspelled_name(store):
+    """公共库里有 49 个单字本名，长查询里含那个字就会被它们捞走。
+
+    「唯一候选」会被当场提升成正式剧名，所以《病》会把一场
+    「病娇男孩的精分曰记」静默改写成《病》——名字对不上、剧本信息全错，
+    而且改完就看不出来了。
+    """
+    public = _public_frame(
+        {"script_name": "病", "script_type": "恐怖", "total_seats": 6},
+        {"script_name": "病娇男孩的精分日记", "script_type": "恐怖", "total_seats": 6},
+    )
+    result = create_session_from_fields(
+        fields={"script_name": "病娇男孩的精分曰记", "start_time": START},
+        store=store,
+        now=NOW,
+        public=public,
+    )
+    assert result["script_match"] == "none"
+    assert result["session"]["script_name"] == "病娇男孩的精分曰记"
+
+
 def test_private_shadows_public_same_name(store):
     add_script(store)  # 私有《雾隐山庄》推理/6人/168
     public = _public_frame(

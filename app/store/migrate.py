@@ -393,7 +393,11 @@ def _import_state(engine: Engine, path: Path, *, force: bool) -> tuple[int, int]
                 "approval_token_hash": row["approval_token_hash"],
                 "access_token_hash": row.get("access_token_hash"),
                 "browser_token_hash": row["browser_token_hash"],
-                "requester_ip_hash": row.get("requester_ip_hash"),
+                # 旧状态库里的这个字段是**裸 SHA-256**（IPv4 只有 2^32 个取值，
+                # 库泄露后可以枚举反推地址）。导入时拿不到 IP 本身，没法按新密钥
+                # 重算，所以直接丢弃。它只服务「同一 IP 每小时的申请上限」，计数
+                # 窗口是 1 小时，历史值对新库没有用处，丢掉不影响限流。
+                "requester_ip_hash": None,
                 "email_error": row.get("email_error"),
             }
             existing = conn.execute(

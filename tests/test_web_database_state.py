@@ -13,8 +13,10 @@ from app.web.access import (
     AccessNotReady,
     AlreadyProcessed,
     ApprovalTokenExpired,
+    RequestLimitExceeded,
 )
 from app.web.access_sql import DatabaseAccessStore
+from app.web.security import hash_ip, hash_token
 from app.web.usage_sql import DatabaseUsageStore
 
 UTC = timezone.utc
@@ -42,7 +44,9 @@ def engine(tmp_path):
 
 
 def _store(engine, clock):
-    return DatabaseAccessStore(engine, now_fn=clock.now)
+    return DatabaseAccessStore(
+        engine, now_fn=clock.now, ip_hash_secret="test-ip-secret"
+    )
 
 
 def test_request_approve_claim_lifecycle(engine):
@@ -140,6 +144,36 @@ def test_state_persists_across_store_instances(engine):
 
     second = _store(engine, clock)
     assert second.get_request(created.request.id).status == "approved"
+
+
+def test_ip_hash_is_salted_and_the_limit_applies(engine):
+    """生产走的是这个 store：哈希必须带密钥，限流必须真的拦下来。"""
+    clock = Clock()
+    store = _store(engine, clock)
+    created = store.create_request(
+        "ip-a@example.com",
+        None,
+        browser_token="browser-a-" + "x" * 24,
+        requester_ip="198.51.100.4",
+        cooldown_minutes=0,
+        ip_limit_per_hour=1,
+        global_limit_per_day=0,
+    )
+    record = store.get_by_approval_token(created.approval_token)
+    assert record.requester_ip_hash == hash_ip("198.51.100.4", "test-ip-secret")
+    assert record.requester_ip_hash != hash_token("198.51.100.4")
+
+    with pytest.raises(RequestLimitExceeded) as caught:
+        store.create_request(
+            "ip-b@example.com",
+            None,
+            browser_token="browser-b-" + "x" * 24,
+            requester_ip="198.51.100.4",
+            cooldown_minutes=0,
+            ip_limit_per_hour=1,
+            global_limit_per_day=0,
+        )
+    assert caught.value.scope == "ip"
 
 
 def test_concurrent_approval_only_succeeds_once(engine):

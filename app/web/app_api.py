@@ -225,8 +225,12 @@ async def auth_request(request: Request):
         return _deny("invalid_email", "邮箱格式不正确。", 400)
     sent = True
     try:
-        request.app.state.mailer.send(
-            _approval_email(settings, created.request, created.approval_token)
+        # mailer.send 内部是同步 httpx.post（超时 10 秒）。这条路由是
+        # async def，直接调用会卡住整个事件循环，单 worker 下所有并发
+        # 请求（页面轮询、静态资源）一起排队。放进线程池即可。
+        await run_in_threadpool(
+            request.app.state.mailer.send,
+            _approval_email(settings, created.request, created.approval_token),
         )
     except EmailSendError as exc:
         sent = False

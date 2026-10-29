@@ -9,7 +9,8 @@
 - **工具注册**：`build_store_tools()` 用 `@tool` 把 12 个业务函数包装成 12 个 Agent 工具，统一返回 JSON 信封 `{"ok", "data", "warnings", "error_code", "error"}`。包装层只做参数适配、依赖注入（Store 或 Excel 路径、当前时间、可注入的 LLM / 搜索 Provider）与结果序列化，**不重新实现业务规则**；确定性逻辑仍在 `app/tools/`。
 - **图与记忆**：`build_agent()` 调用 `langchain.agents.create_agent`，接入 `InMemorySaver` checkpointer。`run_turn()` 以 `thread_id` 区分会话：同一 thread 保留多轮工具调用上下文，不同 thread 相互隔离。会话记忆只保存对话，**不作为场次数据源**。
 - **路由**：`SYSTEM_PROMPT` 写明了 A–N 路由的推荐工具链、写操作触发条件与失败转述规则。其中 F–K 覆盖资源初始化、场次增量录入与排班、资源不足、点评导入和 DM 场控查询；N 覆盖网络查询（本地库未命中 → `web_search` 一次 → 标注非官方 → 店长确认全名后才写库）。**实际是否按推荐链执行由模型决定**——离线脚本模型不能证明真实模型的调度能力。
-- **写操作边界**：只有 `store_data` 的写 action（`upsert_sessions` / `record_booking` / `cancel_booking` / `create_session` / `update_session`）、`script_library` 的 `upsert`、`manage_resources` 的资源写 action，以及 `schedule_sessions` 的 `auto_assign` / `apply` / `resolve` 会写存储，且只在店长明确要求录入、预约、跳车、加剧本、补资源或确认排期时执行。`dm_control`、`web_search` 及另外 6 个工具只读。
+- **写操作边界**：只有 `store_data` 的写 action（`upsert_sessions` / `record_booking` / `cancel_booking` / `create_session` / `update_session`）、`script_library` 的 `upsert` / `remember`、`manage_resources` 的资源写 action，以及 `schedule_sessions` 的 `auto_assign` / `apply` / `resolve` / `cancel_session` 会写存储，且只在店长明确要求录入、预约、跳车、加剧本、补资源或确认排期时执行。`dm_control`、`web_search` 及另外 6 个工具只读。
+- **`remember` 不是对话记忆**：它只把「店长确认过的说法 → 公共库 `script_id`」写进全局表 `script_aliases`，**不存对话正文**，也从不跨用户检索历史对话；读取只在正常匹配为空（或只剩 `loose` 弱匹配）时点查一次。设计取舍见 [工具 8](tools.md#8-剧本库与缩写别名)。
 - **异常边界**：业务失败返回 `ok=false`，未预期异常兜底为 `internal_error`，均不向 ReAct 循环抛异常（`KeyboardInterrupt` / `SystemExit` 除外）。`--read-only` 在工具层硬拦截上述全部写动作，是代码边界而非提示词约定。
 - **事务边界**：Excel 模式下各表文件各自原子替换，跨文件写入之间没有事务；数据库模式下每次表写入在事务内完成，跨表操作仍不是单一事务。真实数据请保留备份。
 

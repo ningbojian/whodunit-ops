@@ -228,9 +228,18 @@ def test_web_dependencies_are_pinned():
 def test_readme_documents_web_honestly():
     text = _read(README)
 
-    assert "代码已实现，尚未公网部署" in text
-    assert "当前没有公网实例" in text
-    assert "尚未实际公网部署" in text
+    # 2026-10-28 起已真实部署。旧措辞必须消失，且新状态必须写明；
+    # 两个方向都断言，避免下次改文档时再出现「测试和 README 各说各话」。
+    for stale in (
+        "代码已实现，尚未公网部署",
+        "当前没有公网实例",
+        "尚未实际公网部署",
+    ):
+        assert stale not in text, stale
+    assert "已部署" in text
+    assert "demo.ghtrending.cyou" in text
+    # 已部署不等于隐瞒缺陷：延迟问题必须如实写在 README 里。
+    assert "0.9–19 秒" in text
     assert "Neon 项目 `shiyuan`（分支 `production`）已创建" in text
     assert "生产业务数据尚未正式导入" in text
     assert "注册 Resend" in text
@@ -267,7 +276,7 @@ def test_readme_documents_new_operations_honestly():
         "Android debug APK 已构建",
         "未做 release 签名、未真机联调、尚未上架",
         "82 项全部通过",
-        "当前没有公网实例",
+        # 公网状态改由 test_readme_documents_web_honestly 断言（已部署 + 延迟如实写明）。
         "通用 HTTP 适配器契约",
         "未对接任何具体灯光 / 音效厂商",
         "不抓取公开页",

@@ -409,3 +409,25 @@ class TestStartup:
         assert "Agent 初始化失败" in output
         assert "sk-***" in output
         assert "sk-secret123" not in output
+
+    def test_console_wires_the_alias_sidecar(self, tmp_path, monkeypatch):
+        """控制台也要接上剧名记忆，否则 remember 永远返回 alias_memory_unavailable。"""
+        from app.store.script_aliases import JsonScriptAliasMemory
+
+        captured: dict[str, Any] = {}
+        real = __import__("app.cli", fromlist=["build_agent"]).build_agent
+
+        def spy(*, model, deps, extra_system_prompt="", **_kwargs):
+            captured["deps"] = deps
+            return real(
+                model=model, deps=deps, extra_system_prompt=extra_system_prompt
+            )
+
+        monkeypatch.setattr("app.cli.build_agent", spy)
+        model = ScriptedChatModel(responses=[AIMessage(content="不应调用")])
+        code, _ = _run_main(tmp_path, ["/quit"], model)
+
+        assert code == 0
+        memory = captured["deps"].script_aliases
+        assert isinstance(memory, JsonScriptAliasMemory)
+        assert memory.path == tmp_path / "script_aliases.json"

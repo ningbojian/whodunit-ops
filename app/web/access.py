@@ -26,6 +26,7 @@ from typing import Callable
 from app.web.security import (
     constant_time_equal,
     email_hash as hash_email,
+    hash_ip,
     hash_token,
     mask_email,
     new_token,
@@ -206,10 +207,14 @@ class AccessStore:
         db_path: str | Path,
         *,
         now_fn: Callable[[], datetime] | None = None,
+        ip_hash_secret: str,
     ) -> None:
+        if not isinstance(ip_hash_secret, str) or not ip_hash_secret:
+            raise ValueError("ip_hash_secret 不能为空")
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._now_fn = now_fn or (lambda: datetime.now(UTC))
+        self._ip_hash_secret = ip_hash_secret
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -385,7 +390,7 @@ class AccessStore:
         email_hash_value = hash_email(normalized)
         browser_hash = hash_token(browser_token)
         ip_hash_value = (
-            hash_token(requester_ip.strip())
+            hash_ip(requester_ip.strip(), self._ip_hash_secret)
             if isinstance(requester_ip, str) and requester_ip.strip()
             else None
         )

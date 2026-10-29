@@ -1,6 +1,6 @@
 # 部署：Neon、Cloudflare Tunnel 与数据迁移
 
-> **当前状态：尚未实际公网部署。** 开发机未安装 Docker，镜像构建与隧道部署都没有执行过；当前没有公网实例。部署结果以目标机上 `docker compose logs` 和公网 `/healthz` 为准。
+> **当前状态：已部署。** 2026-10-28 上线到 `https://demo.ghtrending.cyou`（大陆 ECS + Cloudflare Tunnel）。已验证：隧道 4 条连接注册、`/healthz` 三项 true、线上 `/static/app.js` 与 HEAD 逐字节一致。**已知问题：** Cloudflare 免费版把大陆流量全部分到洛杉矶，链路丢包导致首字节 0.9–19 秒，属链路问题、应用侧无法修复（见下文延迟实测）。
 
 ## Neon（本机已完成）
 
@@ -75,6 +75,10 @@ cd whodunit-ops && git pull && cd deploy/cloudflare && docker compose up -d --bu
 - **需要低延迟时，正解是换到香港或境外的轻量服务器直连**（见下方「备选：香港轻量 + Caddy」），不要继续在隧道上做优化。换协议（`quic` / `http2`）、改 TLS 版本、改 HTTP 版本都**不会**改善上面这组数字——它们改变不了 anycast 把流量送到洛杉矶这件事。要留在这台大陆 ECS 上，应用侧能做的只有压缩每个请求的往返次数（见下两条）。
 - **跨境部署要控制每个请求的数据库往返次数。** 实测从这台 ECS 到 Neon 新加坡：DNS 约 120ms、TCP 建连 55ms、热连接上一次查询 55ms、新建连接含握手约 240ms。所以「多查一条 SQL」就是多 55ms，「多建一次连接」就是多 240ms。`/healthz` 原先在同一个引擎上做四次独立探测（还叠加 `pool_pre_ping` 和归还时的 `ROLLBACK`），实测 0.82 秒；已合并为一次取连接、一条 SQL，约 0.1 秒。新增健康检查或页面查询时请沿用这个口径。
 - **排期页首屏不再让浏览器补一次请求。** `/schedule` 渲染时已经查过一遍库，`app.js` 原先还会解析完 HTML 再发一次 `GET /api/schedule`，把同一批数据（12 条串行查询）重跑一遍。现在服务端把结果序列化进 `data-schedule-page` 的 `data-bootstrap` 属性，前端解析后直接当首屏数据用；只有显式刷新（`loadSchedule(true)`）才走网络。放在 HTML 属性而不是内联脚本里，是为了保持 CSP `script-src 'self'` 不放宽。同一个请求内 `schedule_view` 也只读一次 `ScheduleContext`，rooms/dms/scripts/sessions 不再各读两三遍——`/schedule` 的查询数从 24 条降到 12 条，其中首屏的实际网络往返只有这一页本身。
+- **公共库帧已缓存，别再每个请求整表重读。** `public_scripts` 有 5809 行，`load()` 每次都是整表 `SELECT` + `DataFrame` 重建；`_public_scripts_frame()` 原先每个请求都调一次，而 `_merged_scripts` 在多个视图里都会走到。现在 `OperationsService` 与 `ChatRuntime` 共用一个 `PublicScriptsCache`（`app/web/public_cache.py`，TTL 300 秒）。公共库变更是运营方离线动作，Web 侧没有写入口，所以 TTL 兜底即可；若以后加了 Web 侧导入，导入后要调 `invalidate_public_cache()`。
+- **剧本搜索不要用 `iterrows`。** `find_scripts` 原先对全部 5809 行调用 `script_to_dict`（每行十几次字段归一化），实测 309ms，而最终最多只返回 limit（≤50）条。现在先按名字/别名打分、只给入选行建档案，实测 56ms（5.5 倍）。`to_dict("records")` 也要慎用：它把 13 列全转成 Python 原生对象（含 Timestamp 拆箱）要 96.7ms，而只取 2 列只要 1.4ms。
+- **共享剧名记忆不缓存，这是有意的。** `script_aliases` 的读取只发生在「正常匹配为空、或只剩 `loose` 弱匹配」这条低频路径上，一次主键点查跨境约 55ms，可以接受；加缓存反而要处理多实例陈旧和失效时机。代价是每条「搜索没命中」的请求会多一次数据库往返。**写路径是加锁的**：Postgres 在事务内先取 `pg_advisory_xact_lock` 再做「计数 + 插入」，否则两个实例各自看到插入前的计数，行数上限会被突破一条；SQLite 用进程内模块级锁（跨进程并发写 SQLite 不是支持的拓扑——生产是 Postgres，CLI 走 Excel）；Excel 模式在 sidecar 旁边建一个 `script_aliases.json.lock`，用操作系统建议锁把「读全表 → 改一条 → 整文件替换」跨进程串起来，拿不到锁就拒写并降级成「记忆暂时不可用」，不会静默覆盖别人的键。**读也走同一把锁**：Windows 的 `os.replace` 需要目标文件没被任何句柄打开，一次读正好撞上替换，写侧就 `PermissionError`、这次确认整条落空（实测 400 次写里约 80 次），让读排队冲突就不存在，代价只是 miss 路径上偶尔等一次毫秒级的写。撤销某条映射：直接在库里 `DELETE FROM script_aliases WHERE query_key = '…'`；整表清空即回到没有共享记忆的状态（功能不受影响，只是少了兜底线索）。注意这张表**不在** `python -m app.store.export` 的导出范围内，也不在 `migrate` 的迁移范围内——Excel 模式用的是 `data/script_aliases.json`，切到数据库模式后这些映射会丢。
+- **`async def` 路由里不要直接调同步阻塞函数。** `auth_request` 是 `async def`，原先直接调 `mailer.send()`（内部同步 `httpx.post`，超时 10 秒），单 worker 下会卡住整个事件循环——实测两封邮件并发要 2.09 秒而不是 1 秒。现已放进 `run_in_threadpool`。注意 `submit_request`（`app/web/auth.py`）是同步 `def`，Starlette 本来就会丢进线程池，那里不需要改。
 - 容器磁盘是临时的，业务数据在 Neon；重新部署只丢进程内的对话记忆。
 - **本地管理生成的凭据不能入库。** `cloudflared tunnel login` 写出 `cert.pem`（账户级 API 证书），`create` 写出 `<UUID>.json`（隧道密钥）；`.gitignore` 已把 `deploy/cloudflare/cloudflared/` 整体排除，只放行 `config.yml.example`。
 - **凭据属主要改成 65532。** 准备凭据的一次性容器用 `--user root` 运行，写出的文件是 `root:root 0600`；运行时容器以 nonroot（uid 65532）启动，读不到就会刷 `permission denied`。`chown 65532:65532` 之后保持 `0600` 即可。
@@ -253,6 +257,13 @@ python -m app.store.export --tenant local --out backups/local
 ```
 
 默认按主键幂等合并，重复执行不会产生重复行；`--force` 才会覆盖该租户对应表。每次实际写入都会记录到 `import_runs`。旧目录只有 16 位哈希时，可加 `--state-db data/web_state.sqlite3` 从旧审批记录反查完整邮箱哈希。**正式导入前先备份 `data/`**；迁移不会删除或修改源 Excel。
+
+`--state-only` 会导入审批记录和每日用量，但**丢弃 `requester_ip_hash`**：旧状态库里这个字段是裸 SHA-256，而 IPv4 只有 2^32 个取值，库泄露后可以枚举反推地址；导入时拿不到 IP 本身，无法按新密钥重算。该字段只用于「同一 IP 每小时的申请上限」，计数窗口是 1 小时，丢弃不影响任何仍在生效的限流。已经上线、库里有旧行的实例，可以只清掉已经不可能再计数的那部分：
+
+```sql
+UPDATE access_requests SET requester_ip_hash = NULL
+WHERE created_at < now() - interval '1 hour';
+```
 
 ## 免费层与单 worker 限制
 

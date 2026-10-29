@@ -70,6 +70,7 @@ from app.tools.storage import (
     load_bookings,
     load_sessions_with_counts,
 )
+from app.web.public_cache import PublicScriptsCache
 
 UTC = timezone.utc
 BUSINESS_TZ = "Asia/Shanghai"
@@ -220,24 +221,23 @@ class OperationsService:
         workspace: Any,
         now_fn: Callable[[], datetime] | None = None,
         public_library: Any = None,
+        public_cache: Any = None,
     ) -> None:
         self.settings = settings
         self._workspace = workspace
         self._now_fn = now_fn or (lambda: datetime.now(UTC))
-        # 公共剧本库后端（load() -> DataFrame）；None 时各视图仅用私有库。
-        self._public_library = public_library
+        # 公共库帧缓存：load() 每次整表读 5809 行重建 DataFrame，而这份数据
+        # 只读、全局共享，_merged_scripts 在多个视图里都会调它。缓存对象由
+        # main.py 注入并与 ChatRuntime 共用，见 app/web/public_cache.py。
+        self._public_cache = public_cache or PublicScriptsCache(public_library)
 
     def _public_scripts_frame(self) -> pd.DataFrame | None:
         """加载公共库帧；失败/为空返回 None（不阻塞页面）。"""
-        if self._public_library is None:
-            return None
-        try:
-            frame = self._public_library.load()
-        except Exception:  # noqa: BLE001 - 公共库读失败不阻塞页面
-            return None
-        if frame is None or getattr(frame, "empty", True):
-            return None
-        return frame
+        return self._public_cache.frame()
+
+    def invalidate_public_cache(self) -> None:
+        """丢弃公共库缓存；导入后需要立刻看到新数据时调用。"""
+        self._public_cache.invalidate()
 
     def _merged_scripts(self, store: Any, *, private: Any = None) -> pd.DataFrame:
         """私有库 + 公共库遮蔽合并（仅读路径；写入仍只进私有库）。

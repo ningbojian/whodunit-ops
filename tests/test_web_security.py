@@ -9,6 +9,7 @@ from app.web.security import (
     constant_time_equal,
     csrf_ok,
     email_hash,
+    hash_ip,
     hash_token,
     is_valid_email,
     mask_email,
@@ -127,6 +128,31 @@ class TestTokens:
         assert csrf_ok("abc", "abc") is True
         assert csrf_ok("abc", "def") is False
         assert csrf_ok(None, "abc") is False
+
+
+class TestIpHash:
+    secret = "s" * 48
+
+    def test_same_ip_and_secret_give_the_same_key(self):
+        first = hash_ip("203.0.113.7", self.secret)
+        assert first == hash_ip("203.0.113.7", self.secret)
+        assert len(first) == 64
+        assert first != hash_ip("203.0.113.8", self.secret)
+
+    def test_key_is_not_a_bare_sha256_of_the_address(self):
+        """裸 SHA-256 能被彩虹表逐条枚举回地址，所以必须带密钥。"""
+        assert hash_ip("203.0.113.7", self.secret) != hash_token("203.0.113.7")
+
+    def test_rotating_the_secret_rotates_every_key(self):
+        assert hash_ip("203.0.113.7", self.secret) != hash_ip(
+            "203.0.113.7", "t" * 48
+        )
+
+    def test_rejects_empty_address_or_secret(self):
+        with pytest.raises(ValueError):
+            hash_ip("", self.secret)
+        with pytest.raises(ValueError):
+            hash_ip("203.0.113.7", "")
 
 
 class TestDisplayName:

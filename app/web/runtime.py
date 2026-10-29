@@ -24,6 +24,7 @@ from app.agent import AgentDeps, build_agent, run_turn
 from app.llm import message_text
 from app.store.workspace import TenantWorkspaceError
 from app.web.models import ModelProvider, ModelProviderError
+from app.web.public_cache import PublicScriptsCache
 from app.web.serialization import snapshot_for_paths, snapshot_for_store
 from app.web.trace import safe_trace
 from app.web.usage import UsageError, UsageLimitReached, UsageStore
@@ -154,32 +155,31 @@ class ChatRuntime:
         now_fn: Callable[[], datetime] | None = None,
         public_library: Any = None,
         search_usage: Any = None,
+        public_cache: Any = None,
+        script_aliases: Any = None,
     ) -> None:
         self.settings = settings
         self._models = model_provider
         self._workspace = workspace
         self._usage = usage
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
-        # 公共剧本库后端（load() -> DataFrame）；None 时 Agent 仅用私有库。
-        self._public_library = public_library
+        # 与 OperationsService 共用的公共库帧缓存，见 public_cache.py。
+        self._public_cache = public_cache or PublicScriptsCache(public_library)
         # web_search 日配额计数器（Json/Sql SearchUsage）；None 时工具内建 Excel sidecar。
         self._search_usage = search_usage
+        # 全局剧名记忆（无 tenant_id，跨门店共享）；Excel 模式是本地 JSON sidecar。
+        self._script_aliases = script_aliases
         self._cache_lock = threading.RLock()
         self._users: dict[str, _UserRuntime] = {}
         self._semaphore = threading.BoundedSemaphore(settings.max_concurrent_turns)
 
     def public_scripts_frame(self) -> pd.DataFrame | None:
-        """加载公共库帧；失败返回 None（公共库是增强能力，不阻塞对话）。"""
-        if self._public_library is None:
-            return None
-        try:
-            frame = self._public_library.load()
-        except Exception as exc:  # noqa: BLE001 - 公共库读失败不阻塞对话
-            logger.warning("public library load failed: %s", type(exc).__name__)
-            return None
-        if frame is None or getattr(frame, "empty", True):
-            return None
-        return frame
+        """加载公共库帧；失败返回 None（公共库是增强能力，不阻塞对话）。
+
+        走与 OperationsService 共用的缓存：否则每建一个用户 Agent 都要
+        把 5809 行整表读一遍，见 app/web/public_cache.py。
+        """
+        return self._public_cache.frame()
 
     def _pandas_now(self) -> pd.Timestamp:
         """业务层使用不带时区的门店本地时间（UTC+8）。
@@ -216,6 +216,7 @@ class ChatRuntime:
                 public_scripts=public_frame,
                 tenant_id=tenant_id or None,
                 search_usage=self._search_usage,
+                script_aliases=self._script_aliases,
             )
         else:
             deps = AgentDeps(
@@ -230,6 +231,7 @@ class ChatRuntime:
                 public_scripts=public_frame,
                 tenant_id=tenant_id or None,
                 search_usage=self._search_usage,
+                script_aliases=self._script_aliases,
             )
         try:
             return build_agent(model=bundle.main, deps=deps)

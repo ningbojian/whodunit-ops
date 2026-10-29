@@ -21,7 +21,7 @@ from app.web.access import (
     RequestLimitExceeded,
     RequestNotFound,
 )
-from app.web.security import InvalidEmail, hash_token, new_token
+from app.web.security import InvalidEmail, hash_ip, hash_token, new_token
 from tests.web_helpers import MutableClock, make_store
 
 
@@ -52,7 +52,8 @@ class TestCreateRequest:
         assert request.approval_token_hash == hash_token(created.approval_token)
         assert request.browser_token_hash == hash_token(created.browser_token)
         assert request.access_token_hash is None
-        assert request.requester_ip_hash is not None
+        assert request.requester_ip_hash == hash_ip("203.0.113.1", "test-ip-secret")
+        assert request.requester_ip_hash != hash_token("203.0.113.1")
 
         row = store._conn.execute("SELECT * FROM access_requests").fetchone()
         row_text = "|".join(str(value) for value in tuple(row))
@@ -150,6 +151,45 @@ class TestCreateRequest:
             ip_limit_per_hour=2,
             global_limit_per_day=0,
         )
+
+    def test_ip_limit_is_keyed_by_the_salted_hash(self, tmp_path):
+        """轮换 WEB_SESSION_SECRET 会让当前这一小时的 IP 计数归零。
+
+        这是文档写明的代价，不是缺陷；同时它也证明计数键确实依赖密钥，
+        而不是明文地址。
+        """
+        clock = MutableClock()
+        first = make_store(tmp_path, clock, ip_hash_secret="a" * 48)
+        _create(
+            first,
+            "a@example.com",
+            requester_ip="198.51.100.9",
+            cooldown_minutes=0,
+            ip_limit_per_hour=1,
+            global_limit_per_day=0,
+        )
+        with pytest.raises(RequestLimitExceeded) as caught:
+            _create(
+                first,
+                "b@example.com",
+                requester_ip="198.51.100.9",
+                cooldown_minutes=0,
+                ip_limit_per_hour=1,
+                global_limit_per_day=0,
+            )
+        assert caught.value.scope == "ip"
+        first.close()
+
+        rotated = make_store(tmp_path, clock, ip_hash_secret="b" * 48)
+        _create(
+            rotated,
+            "b@example.com",
+            requester_ip="198.51.100.9",
+            cooldown_minutes=0,
+            ip_limit_per_hour=1,
+            global_limit_per_day=0,
+        )
+        rotated.close()
 
     def test_global_daily_limit_and_cst_reset(self, tmp_path):
         clock = MutableClock()  # 2026-10-20 04:00 UTC = 12:00 CST

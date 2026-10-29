@@ -80,6 +80,26 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def hash_ip(address: str, secret: str) -> str:
+    """按 IP 限流用的键：**加盐**哈希，库泄露后不能反推地址。
+
+    ``hash_token`` 对高熵 token 够用（256 位猜不出来），对 IP 不够：IPv4
+    只有 2^32 个取值，裸 SHA-256 建一张表几分钟就能枚举回来——存下来的
+    就不是「匿名计数」，而是地址本身。这里改成 HMAC。
+
+    密钥取 ``WEB_SESSION_SECRET``：它必须跨重启、跨实例稳定，否则同一个
+    IP 每次都被算成不同的键，限流直接失效。反过来，轮换这个密钥会让当前
+    这一小时的 IP 计数归零，代价可以忽略。
+    """
+    if not isinstance(address, str) or not address:
+        raise ValueError("address 不能为空")
+    if not isinstance(secret, str) or not secret:
+        raise ValueError("IP 哈希需要密钥")
+    return hmac.new(
+        secret.encode("utf-8"), address.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
 def new_token(nbytes: int = 32) -> str:
     """生成 URL 安全的随机 token。
 
