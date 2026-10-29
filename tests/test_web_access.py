@@ -12,7 +12,6 @@ from app.web.access import (
     AccessNotReady,
     AccessStore,
     AccessTokenInvalid,
-    ActiveAccessExists,
     AlreadyProcessed,
     ApprovalTokenExpired,
     ApprovalTokenInvalid,
@@ -44,6 +43,7 @@ class TestCreateRequest:
 
         assert request.status == "pending"
         assert request.email == "user@example.com"
+        assert created.replaces_active is None
         assert request.display_name == "小明"
         assert request.created_at == clock.now()
         assert request.approval_expires_at == clock.now() + timedelta(hours=24)
@@ -79,13 +79,24 @@ class TestCreateRequest:
             "SELECT COUNT(*) AS n FROM access_requests"
         ).fetchone()["n"] == 1
 
-    def test_active_access_takes_precedence(self, tmp_path):
-        store = make_store(tmp_path, MutableClock())
+    def test_active_access_no_longer_blocks_a_new_request(self, tmp_path):
+        """换浏览器、清了 Cookie 或误点「退出」的用户必须能重新申请。
+
+        访问期默认 30 天，如果还像旧实现那样直接报「已有有效访问」，用户
+        就只能干等一个月——而他其实只是丢了会话。
+        """
+        clock = MutableClock()
+        store = make_store(tmp_path, clock)
         created = _create(store)
         store.approve(created.approval_token)
-        with pytest.raises(ActiveAccessExists) as caught:
-            _create(store, "user@example.com")
-        assert caught.value.request.status == "approved"
+
+        clock.advance(minutes=11)
+        again = _create(store, "user@example.com")
+        assert again.request.status == "pending"
+        assert again.replaces_active is not None
+        assert again.replaces_active.id == created.request.id
+        # 旧记录不动：重新申请不会撤销尚未到期的访问。
+        assert store.get_request(created.request.id).status == "approved"
 
     def test_email_cooldown_after_rejection(self, tmp_path):
         clock = MutableClock()
@@ -319,7 +330,8 @@ class TestApproveReject:
 
         assert approved.request.status == "approved"
         assert approved.request.approved_at == clock.now()
-        assert approved.request.access_expires_at == clock.now() + timedelta(hours=8)
+        # 不传 access_hours 时用默认值：30 天（720 小时）。
+        assert approved.request.access_expires_at == clock.now() + timedelta(hours=720)
         assert approved.request.access_token_hash == hash_token(approved.access_token)
         assert store.validate_access_token(approved.access_token).id == created.request.id
         assert store.get_by_access_token(approved.access_token).id == created.request.id
@@ -373,7 +385,7 @@ class TestApproveReject:
         clock = MutableClock()
         store = make_store(tmp_path, clock)
         created = _create(store)
-        approved = store.approve(created.approval_token)
+        approved = store.approve(created.approval_token, access_hours=8)
 
         clock.advance(hours=7, minutes=59, seconds=59)
         assert store.validate_access_token(approved.access_token).id == created.request.id
@@ -404,7 +416,7 @@ class TestApproveReject:
             ip_limit_per_hour=0,
             global_limit_per_day=0,
         )
-        store.approve(created.approval_token)
+        store.approve(created.approval_token, access_hours=8)
         clock.advance(hours=8, seconds=1)
 
         second = _create(
@@ -469,7 +481,7 @@ class TestClaim:
         clock = MutableClock()
         store = make_store(tmp_path, clock)
         created = _create(store)
-        store.approve(created.approval_token)
+        store.approve(created.approval_token, access_hours=8)
         clock.advance(hours=8)
         with pytest.raises(AccessExpired):
             store.claim(created.request.id, created.browser_token)
@@ -493,7 +505,7 @@ class TestPublicViewAndCleanup:
         clock = MutableClock()
         store = make_store(tmp_path, clock)
         created = _create(store)
-        approved = store.approve(created.approval_token)
+        approved = store.approve(created.approval_token, access_hours=8)
         data = approved.request.public_dict(clock.now())
         assert data["status"] == "approved"
         assert data["access_remaining_seconds"] == 8 * 3600
@@ -506,7 +518,7 @@ class TestPublicViewAndCleanup:
         assert created.request.approval_remaining_seconds(clock.now()) == 24 * 3600
         assert created.request.access_remaining_seconds(clock.now()) == 0
 
-        approved = store.approve(created.approval_token)
+        approved = store.approve(created.approval_token, access_hours=8)
         assert approved.request.access_remaining_seconds(clock.now()) == 8 * 3600
         clock.advance(hours=8)
         assert approved.request.effective_status(clock.now()) == "expired"

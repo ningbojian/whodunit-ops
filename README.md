@@ -25,7 +25,7 @@
 | Flutter 双角色客户端 | ⚠️ 部分验证 | `dart analyze` 0 issues、`flutter test` **82 项全部通过**、Android debug APK 已构建；**未做 release 签名、未真机联调、尚未上架** |
 | 硬件灯光 / 音效联动 | ⚠️ 仅契约 | 通用 HTTP 适配器契约，**未对接任何具体灯光 / 音效厂商** |
 | 公网部署 | ⚠️ 已部署，延迟高 | **已上线 `demo.ghtrending.cyou`**；Cloudflare 免费版把大陆流量送到洛杉矶，链路丢包导致首字节 0.9–19 秒，属链路问题、应用侧不可修复 |
-| 测试 | ✅ | **1719 个 pytest 通过**，另 2 个可选 Postgres 测试默认跳过 |
+| 测试 | ✅ | **1725 个 pytest 通过**，另 2 个可选 Postgres 测试默认跳过 |
 
 **怎么读这份文档**：只有标了 ✅ 的才是已实现；其余内容为已定设计或明确标注的未验证项。**明确没做的三件事**——Flutter 真机联调、阈值标定、真实模型稳定性——不在这份文档里假装已完成。
 
@@ -125,7 +125,7 @@ python -m app.web.main         # http://127.0.0.1:8000/login
 
 ## 网页版与部署状态
 
-**已部署。**网页版跑通了「申请 → 开发者邮件审批 → 8 小时访问 → 到期重新申请」全流程，每邮箱数据隔离（`tenant_id = email_hash[:16]`，不同邮箱互不可见）。演示地址 **`https://demo.ghtrending.cyou`**（大陆 ECS + Cloudflare Tunnel；宿主机不开放入站端口）。
+**已部署。**网页版跑通了「申请 → 开发者邮件审批 → 30 天访问 → 到期重新申请」全流程，每邮箱数据隔离（`tenant_id = email_hash[:16]`，不同邮箱互不可见）。演示地址 **`https://demo.ghtrending.cyou`**（大陆 ECS + Cloudflare Tunnel；宿主机不开放入站端口）。
 
 - **存储**：业务数据、审批记录与每日用量可存入 Neon Postgres（`WEB_STORAGE_BACKEND=database`）；本地不填 `DATABASE_URL` 时写 `data/web.sqlite3`。**生产环境已禁止 `WEB_STORAGE_BACKEND=excel`**——临时磁盘会在重启后丢光数据，启动校验直接报错。
 - **已验证**：**Neon 项目 `shiyuan`（分支 `production`）已创建**，schema 已建，本机 uvicorn 的申请 / 审批 / 领取 / 看板 HTTP 链路端到端验收通过；2026-10-20 用真实 Resend 向 `OWNER_EMAIL` 发信成功（只验证了 Resend 账号本人收件）。**生产业务数据尚未正式导入。**

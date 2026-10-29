@@ -21,7 +21,6 @@ from starlette.concurrency import run_in_threadpool
 from app.web.access import (
     AccessExpired,
     AccessNotReady,
-    ActiveAccessExists,
     BrowserTokenInvalid,
     RequestCooldown,
     RequestLimitExceeded,
@@ -133,7 +132,9 @@ def require_merchant(request: Request) -> MerchantAccess:
         # DM 场控令牌只对 /api/dm/* 有效，不能拿来读商家数据。
         raise OperationsError("forbidden", "场控令牌不能调用商家接口。", 403)
     try:
-        payload = _serializer(request).loads(token, max_age=7 * 24 * 3600)
+        payload = _serializer(request).loads(
+            token, max_age=_settings(request).session_seconds
+        )
     except SignatureExpired:
         raise OperationsError("token_expired", "商家令牌已过期。", 401) from None
     except BadSignature:
@@ -215,8 +216,6 @@ async def auth_request(request: Request):
             ip_limit_per_hour=settings.requests_per_ip_per_hour,
             global_limit_per_day=settings.requests_global_per_day,
         )
-    except ActiveAccessExists:
-        return _deny("active_access", "该邮箱已有有效访问，请直接登录。", 409)
     except RequestCooldown:
         return _deny("request_cooldown", "申请过于频繁，请稍后再试。", 429)
     except RequestLimitExceeded:

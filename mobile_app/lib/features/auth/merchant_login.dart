@@ -100,9 +100,7 @@ class _MerchantLoginScreenState extends State<MerchantLoginScreen> {
       });
       _startPolling();
     } on ApiException catch (exc) {
-      if (exc.code == 'active_access') {
-        _setMessage('该邮箱已有有效访问。请在已登录的设备继续使用，或等访问到期后重新申请。');
-      } else if (exc.code == 'request_cooldown' || exc.code == 'request_limited') {
+      if (exc.code == 'request_cooldown' || exc.code == 'request_limited') {
         _setMessage('提交过于频繁，请稍后再试。');
       } else if (exc.code == 'invalid_email') {
         _setMessage('邮箱格式不正确。');

@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import pytest
 from fastapi.testclient import TestClient
 
+from app.web.auth import hours_label
 from app.web.main import create_app
 from app.web.mailer import EmailSendError, RecordingEmailSender
 from app.web.models import StaticModelProvider
@@ -44,6 +45,8 @@ def test_request_sends_approval_only_to_owner_and_get_does_not_approve(tmp_path)
         response = request_access(client, email="user@example.com", name="阿青")
         assert response.status_code == 200
         assert response.url.path == "/pending"
+        # 首次申请不该出现「你之前的授权还有效」这类恢复提示。
+        assert "当前浏览器没有登录" not in response.text
         assert mailer.last is not None
         assert mailer.last.to == "owner@example.com"
         assert "新的网页版访问申请" in mailer.last.subject
@@ -309,7 +312,12 @@ def test_duplicate_pending_request_is_rate_limited(tmp_path):
         assert "等待开发者处理" in response.text
 
 
-def test_active_access_blocks_duplicate_request(tmp_path):
+def test_a_returning_browser_can_request_access_again(tmp_path):
+    """丢了会话（换浏览器、清 Cookie、点「退出」）的用户必须能重新申请。
+
+    访问期是 30 天。如果像旧实现那样直接回 409「已有有效访问」，用户就只能
+    干等一个月，而他其实只是丢了 Cookie。
+    """
     clock = MutableClock()
     mailer = RecordingEmailSender()
     app = build_app(tmp_path, clock, mailer)
@@ -317,11 +325,19 @@ def test_active_access_blocks_duplicate_request(tmp_path):
     with TestClient(app) as client:
         fully_authorize(client, mailer)
 
+    # 绕开同一邮箱 10 分钟的申请冷却。
+    clock.advance(minutes=11)
     second_app = build_app(tmp_path, clock, mailer)
     with TestClient(second_app) as second:
         response = request_access(second, email="user@example.com")
-        assert response.status_code == 409
-        assert "已有有效访问" in response.text
+        assert response.status_code == 200
+        assert response.url.path == "/pending"
+        # 页面要解释清楚这不是出错，而是换了个浏览器。
+        assert "当前浏览器没有登录" in response.text
+
+        assert approve_access(second, mailer).status_code == 200
+        assert claim_access(second) == 200
+        assert second.get("/api/me").status_code == 200
 
 
 def test_ip_request_limit(tmp_path):
@@ -354,6 +370,42 @@ def test_ip_request_limit_survives_a_restart(tmp_path):
     )
     with TestClient(restarted) as client:
         assert request_access(client, email="two@example.com").status_code == 429
+
+
+def test_a_month_long_window_is_shown_in_days(tmp_path):
+    """默认 30 天的窗口在页面上要写成「30 天」，不是「720 小时」。"""
+    clock = MutableClock()
+    mailer = RecordingEmailSender()
+    app = build_app(tmp_path, clock, mailer, access_hours=720, session_hours=720)
+
+    with TestClient(app) as client:
+        assert "30 天内可访问" in client.get("/login").text
+
+        request_access(client)
+        assert "30 天内使用" in mailer.last.text
+
+        token = approval_token_from_mail(mailer)
+        page = client.get(f"/approve/{token}")
+        assert "批准（30 天）" in page.text
+
+        approved = approve_access(client, mailer)
+        assert approved.status_code == 200
+        # 备用链接只在批准之后才渲染，所以这句要在 POST 的响应里找。
+        assert "30 天内有效" in approved.text
+
+        # 领取之前才带剩余秒数；领取之后会话已经建立，这个字段就没有了。
+        status = client.get("/api/access/status").json()
+        assert status["access_remaining_seconds"] == 720 * 3600
+
+        assert claim_access(client) == 200
+
+
+def test_hours_label_keeps_non_whole_days_as_hours():
+    assert hours_label(720) == "30 天"
+    assert hours_label(48) == "2 天"
+    assert hours_label(36) == "36 小时"
+    assert hours_label(8) == "8 小时"
+    assert hours_label(1.5) == "1.5 小时"
 
 
 def test_invalid_email_and_missing_origin_do_not_create_request(tmp_path):

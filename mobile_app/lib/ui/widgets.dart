@@ -75,11 +75,19 @@ String dateOf(Object? value) {
   return text;
 }
 
+/// 秒数 → 时长文案。
+///
+/// 访问剩余时间可能是 30 天（2 592 000 秒），所以超过一天要显示「N 天」。
+/// 旧实现把值截断在 99:59:59，30 天授权会一直显示 99:59:59，看起来像快到期了。
 String durationOf(Object? seconds) {
-  final total = (intOf(seconds) ?? 0).clamp(0, 359999);
-  final hours = total ~/ 3600;
+  final total = (intOf(seconds) ?? 0).clamp(0, 366 * 86400);
+  final days = total ~/ 86400;
+  final hours = (total % 86400) ~/ 3600;
   final minutes = (total % 3600) ~/ 60;
   final rest = total % 60;
+  if (days > 0) {
+    return hours > 0 ? '$days 天 $hours 小时' : '$days 天';
+  }
   if (hours > 0) {
     return '${hours.toString().padLeft(2, '0')}:'
         '${minutes.toString().padLeft(2, '0')}:'

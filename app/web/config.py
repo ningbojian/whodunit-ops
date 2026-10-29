@@ -133,9 +133,9 @@ class WebSettings:
     database_max_overflow: int = 2
     database_pool_timeout: float = 10.0
 
-    access_hours: float = 8.0
+    access_hours: float = 720.0
     approval_ttl_hours: float = 24.0
-    session_hours: float = 24.0
+    session_hours: float = 720.0
 
     max_input_chars: int = 2000
     max_body_bytes: int = 32768
@@ -300,6 +300,21 @@ class WebSettings:
         default_state_db = PROJECT_ROOT / "data" / "web_state.sqlite3"
         default_database_sqlite = PROJECT_ROOT / "data" / "web.sqlite3"
 
+        # 会话有效期必须覆盖整个访问期。否则用户批准后正在用，Cookie 先过期，
+        # 表现就是「明明批准了还是天天被踢回 /login」——启动时就报错，别让它
+        # 变成上线后才发现的体验问题。
+        access_hours = _float(
+            env_map, "WEB_ACCESS_HOURS", 720.0, minimum=0.1, maximum=744.0
+        )
+        session_hours = _float(
+            env_map, "WEB_SESSION_HOURS", 720.0, minimum=1.0, maximum=744.0
+        )
+        if session_hours < access_hours:
+            raise WebConfigError(
+                f"WEB_SESSION_HOURS（{session_hours:g} 小时）不能短于 "
+                f"WEB_ACCESS_HOURS（{access_hours:g} 小时）：访问期内会话会先失效"
+            )
+
         settings = cls(
             env=env_name,
             session_secret=session_secret,
@@ -325,15 +340,11 @@ class WebSettings:
             database_pool_timeout=_float(
                 env_map, "DATABASE_POOL_TIMEOUT", 10.0, minimum=1.0, maximum=60.0
             ),
-            access_hours=_float(
-                env_map, "WEB_ACCESS_HOURS", 8.0, minimum=0.1, maximum=72.0
-            ),
+            access_hours=access_hours,
             approval_ttl_hours=_float(
                 env_map, "WEB_APPROVAL_TTL_HOURS", 24.0, minimum=1.0, maximum=168.0
             ),
-            session_hours=_float(
-                env_map, "WEB_SESSION_HOURS", 24.0, minimum=1.0, maximum=72.0
-            ),
+            session_hours=session_hours,
             max_input_chars=_int(
                 env_map, "WEB_MAX_INPUT_CHARS", 2000, minimum=1, maximum=10000
             ),

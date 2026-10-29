@@ -24,7 +24,6 @@ from app.web.access import (
     AccessNotReady,
     AccessRequest,
     AccessTokenInvalid,
-    ActiveAccessExists,
     AlreadyProcessed,
     ApprovalTokenExpired,
     ApprovalTokenInvalid,
@@ -216,9 +215,9 @@ class DatabaseAccessStore:
         approval_expires = now + timedelta(hours=approval_ttl_hours)
 
         with self._write() as conn:
-            active = self._find_active(conn, email_hash_value, now)
-            if active is not None:
-                raise ActiveAccessExists(active)
+            # 与 AccessStore 保持一致：已有有效访问不再拦截新申请，否则用户
+            # 换浏览器或清了 Cookie 之后只能等整个访问期结束。
+            superseded = self._find_active(conn, email_hash_value, now)
 
             pending = self._find_pending(conn, email_hash_value, now)
             if pending is not None:
@@ -296,6 +295,7 @@ class DatabaseAccessStore:
                 request=created,
                 approval_token=approval_token,
                 browser_token=browser_token,
+                replaces_active=superseded,
             )
 
     def get_request(self, request_id: str) -> AccessRequest | None:
@@ -338,7 +338,7 @@ class DatabaseAccessStore:
         self,
         approval_token: str | None,
         *,
-        access_hours: float = 8.0,
+        access_hours: float = 720.0,
     ) -> ApprovedRequest:
         if not isinstance(approval_token, str) or not approval_token:
             raise ApprovalTokenInvalid("审批链接无效")

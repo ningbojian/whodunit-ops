@@ -136,6 +136,8 @@ cd whodunit-ops && git pull && cd deploy/cloudflare && docker compose up -d --bu
 
    `PUBLIC_BASE_URL` 必须是最终 HTTPS 地址，它决定审批邮件里的链接。
 
+   这一份 `.env` **不要**写 `WEB_ACCESS_HOURS` / `WEB_SESSION_HOURS`，用默认值（各 720 小时 = 30 天）即可。旧版本曾经把 `WEB_SESSION_HOURS=24` 当作推荐值，现在留着它会**直接启动失败**：会话比访问期短，用户批准后会在访问仍有效时被踢回 `/login`。看到 `WEB_SESSION_HOURS（24 小时）不能短于 WEB_ACCESS_HOURS（720 小时）` 这条报错，把那一行删掉再 `docker compose up -d` 即可。
+
 5. **启动**：
 
    ```bash

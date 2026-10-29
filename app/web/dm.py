@@ -85,7 +85,7 @@ def _is_merchant_token(request: Request, token: str) -> bool:
     try:
         payload = URLSafeTimedSerializer(
             _settings(request).session_secret, salt=MERCHANT_SALT
-        ).loads(token, max_age=7 * 24 * 3600)
+        ).loads(token, max_age=_settings(request).session_seconds)
     except Exception:  # noqa: BLE001 - 任何解析失败都按普通无效 token 处理
         return False
     return isinstance(payload, dict) and payload.get("t") == "merchant"

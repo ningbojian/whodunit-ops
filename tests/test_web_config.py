@@ -23,9 +23,12 @@ class TestDefaults:
         assert settings.owner_email == "owner@example.com"
         assert settings.public_base_url == "http://127.0.0.1:8000"
         assert settings.cookie_secure is False
-        assert settings.access_seconds == 8 * 3600
+        # 批准后可用的默认时长是 30 天；会话 Cookie 必须至少同样长，
+        # 否则访问还在有效期内，用户就被踢回 /login 重新申请。
+        assert settings.access_seconds == 720 * 3600
         assert settings.approval_ttl_seconds == 24 * 3600
-        assert settings.session_seconds == 24 * 3600
+        assert settings.session_seconds == 720 * 3600
+        assert settings.session_seconds >= settings.access_seconds
         assert settings.max_input_chars == 2000
         assert settings.max_body_bytes == 32768
         assert settings.request_cooldown_minutes == 10
@@ -285,6 +288,8 @@ class TestNumericLimits:
             ("WEB_MODEL_TIMEOUT_SECONDS", "nan"),
             ("WEB_MODEL_TIMEOUT_SECONDS", "1"),
             ("WEB_ACCESS_HOURS", "0"),
+            ("WEB_ACCESS_HOURS", "745"),
+            ("WEB_SESSION_HOURS", "745"),
             ("WEB_APPROVAL_TTL_HOURS", "-1"),
             ("WEB_REQUEST_COOLDOWN_MINUTES", "-1"),
         ],
@@ -292,6 +297,21 @@ class TestNumericLimits:
     def test_out_of_range(self, name, value):
         with pytest.raises(WebConfigError, match=name):
             WebSettings.from_env(env_base(**{name: value}))
+
+    def test_session_shorter_than_access_is_rejected(self):
+        """旧的 `WEB_SESSION_HOURS=24` 配上新的 30 天访问期必须启动失败。
+
+        这种组合不会报错，只会让批准过的用户每天被踢回 /login 重新申请，
+        表面上像「授权没用」。
+        """
+        with pytest.raises(WebConfigError, match="WEB_SESSION_HOURS"):
+            WebSettings.from_env(env_base(WEB_SESSION_HOURS="24"))
+
+    def test_session_equal_to_access_is_allowed(self):
+        settings = WebSettings.from_env(
+            env_base(WEB_ACCESS_HOURS="8", WEB_SESSION_HOURS="8")
+        )
+        assert settings.access_seconds == settings.session_seconds == 8 * 3600
 
     def test_zero_disables_request_limits(self):
         settings = WebSettings.from_env(

@@ -26,7 +26,6 @@ from app.web.access import (
     AccessRequest,
     AccessStore,
     AccessTokenInvalid,
-    ActiveAccessExists,
     ApprovalTokenExpired,
     ApprovalTokenInvalid,
     AlreadyProcessed,
@@ -49,6 +48,34 @@ from app.web.security import (
 logger = logging.getLogger("app.web.auth")
 CST = timezone(timedelta(hours=8))
 UTC = timezone.utc
+
+
+def hours_label(hours: float) -> str:
+    """把小时数换成给人看的说法：整天的用「天」，其余仍用「小时」。
+
+    默认访问时长是一个月（720 小时），页面上写「720 小时」既难读也容易
+    被当成笔误；同时保留小数与非整天的原样输出，避免出现「1.5 天」。
+    """
+    if hours >= 48 and hours % 24 == 0:
+        return f"{int(hours // 24)} 天"
+    return f"{hours:g} 小时"
+
+
+def _granted_hours(record: "AccessRequest | None") -> str:
+    """这条记录实际被批准的访问时长（用于到期页文案）。
+
+    不能拿当前配置顶替：改过 `WEB_ACCESS_HOURS` 之后，旧记录仍然按批准
+    当时的时长到期，报配置里的数字就等于对用户说假话。拿不到记录时返回
+    空串，调用方改用不提具体时长的说法。
+    """
+    if record is None or record.approved_at is None or record.access_expires_at is None:
+        return ""
+    seconds = (
+        _as_utc(record.access_expires_at) - _as_utc(record.approved_at)
+    ).total_seconds()
+    if seconds <= 0:
+        return ""
+    return hours_label(seconds / 3600)
 
 
 class AuthError(RuntimeError):
@@ -152,7 +179,7 @@ def _render(
         "request": request,
         "product_name": "剧本杀拼场运营助手",
         "csrf": _ensure_csrf(request),
-        "access_hours": f"{settings.access_hours:g}",
+        "access_label": hours_label(settings.access_hours),
         # 本地开发用 console 模式时，邮件只打印在服务端终端；页面明确提示，
         # 避免把“没收到邮件”误判成发送失败。生产环境禁止 console。
         "console_email": settings.email_backend == "console",
@@ -305,7 +332,7 @@ def _approval_email(settings, record: AccessRequest, token: str) -> EmailMessage
         f"邮箱：{record.email}\n"
         f"申请时间（UTC+8）：{_format_cst(record.created_at)}\n\n"
         f"审批链接：{approve_url}\n\n"
-        f"批准后该用户可在 {settings.access_hours:g} 小时内使用；"
+        f"批准后该用户可在 {hours_label(settings.access_hours)}内使用；"
         "到期后需要重新申请并由你再次批准。\n"
         f"审批链接 {settings.approval_ttl_hours:g} 小时内有效，且只能处理一次。\n"
     )
@@ -319,7 +346,7 @@ def _approval_email(settings, record: AccessRequest, token: str) -> EmailMessage
         f"邮箱：{safe_email}<br>"
         f"申请时间（UTC+8）：{html.escape(_format_cst(record.created_at))}</p>"
         f'<p><a href="{safe_url}">打开审批页</a></p>'
-        f"<p>批准后 {settings.access_hours:g} 小时内可用；"
+        f"<p>批准后 {hours_label(settings.access_hours)}内可用；"
         f"审批链接 {settings.approval_ttl_hours:g} 小时内有效，只能处理一次。</p>"
     )
     return EmailMessage(
@@ -391,17 +418,6 @@ def submit_request(
             ip_limit_per_hour=settings.requests_per_ip_per_hour,
             global_limit_per_day=settings.requests_global_per_day,
         )
-    except ActiveAccessExists as exc:
-        minutes = max(1, exc.request.access_remaining_seconds(_now(request)) // 60)
-        return _render(
-            request,
-            "login.html",
-            {
-                "error": f"该邮箱已有有效访问，剩余约 {minutes} 分钟。"
-                "如果你之前保存过备用链接，可以直接打开；否则请等它到期后重新申请。",
-            },
-            status_code=409,
-        )
     except RequestCooldown as exc:
         live = _live_pending(request)
         if live is not None and live.request_id == exc.request.id:
@@ -471,6 +487,9 @@ def submit_request(
         )
 
     _set_pending_session(request, created.request, browser_token)
+    if created.replaces_active is not None:
+        # 只影响这一页的解释文案；访问本身仍要等开发者批准。
+        request.session["pending_replaces_active"] = True
     return RedirectResponse("/pending", status_code=303)
 
 
@@ -490,6 +509,7 @@ def pending_page(request: Request):
             "email_masked": mask_email(pending.record.email),
             "created_at": _format_cst(pending.record.created_at),
             "approval_expires_at": _format_cst(pending.record.approval_expires_at),
+            "replaces_active": bool(request.session.pop("pending_replaces_active", False)),
         },
     )
 
@@ -588,7 +608,7 @@ def _approve_context(
         "access_expires_at": (
             _format_cst(record.access_expires_at) if record and record.access_expires_at else "—"
         ),
-        "access_hours": f"{settings.access_hours:g}",
+        "access_label": hours_label(settings.access_hours),
         "magic_link": magic_link,
         "message": message,
     }
@@ -740,11 +760,18 @@ def unlock(request: Request, token: str = Query("")):
             status_code=404,
         )
     except StoreAccessExpired:
-        hours = f"{_settings(request).access_hours:g}"
+        # 用这条记录自己被批准的时长，而不是当前配置。改过
+        # WEB_ACCESS_HOURS 之后，旧记录的实际时长和配置并不相同。
+        granted = _granted_hours(_store(request).get_by_access_token(token))
+        message = (
+            f"这次访问已超过 {granted}，请重新申请。"
+            if granted
+            else "访问已到期，请重新申请。"
+        )
         return _render(
             request,
             "error.html",
-            {"title": "访问已到期", "message": f"访问已超过 {hours} 小时，请重新申请。"},
+            {"title": "访问已到期", "message": message},
             status_code=401,
         )
     _set_access_session(request, record)

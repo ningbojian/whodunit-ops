@@ -11,6 +11,13 @@
     <h1>等待开发者批准</h1>
     <p class="lede">审批通过后，这个页面会自动进入聊天界面。请不要关闭页面。</p>
 
+    {% if replaces_active %}
+    <p class="notice" role="status">
+      这个邮箱之前的访问仍然有效，但当前浏览器没有登录（换了浏览器、清了 Cookie，或者点过「退出」）。
+      已重新通知开发者，批准后即可继续使用；之前的访问到期时间不受影响。
+    </p>
+    {% endif %}
+
     {% if console_email %}
     <p class="notice" role="status">
       本地控制台邮件模式：<strong>没有发送真实邮件</strong>。

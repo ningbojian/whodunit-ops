@@ -243,7 +243,8 @@ def test_readme_documents_web_honestly():
     assert "Neon 项目 `shiyuan`（分支 `production`）已创建" in text
     assert "生产业务数据尚未正式导入" in text
     assert "注册 Resend" in text
-    assert "8 小时" in text
+    assert "30 天访问" in text
+    assert "8 小时" not in text
     assert "EMAIL_BACKEND=resend" in text
     assert "onboarding@resend.dev" in text
     assert "每邮箱数据隔离" in text

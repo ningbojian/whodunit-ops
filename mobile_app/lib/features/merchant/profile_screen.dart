@@ -194,7 +194,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    '审批访问为 8 小时一批；到期后需要重新申请。',
+                    '到期后需要重新申请。换了设备或清了缓存时，重新提交申请即可，开发者批准后就能继续使用。',
                     style: TextStyle(
                       color: AppColors.textFaint,
                       fontSize: 11,

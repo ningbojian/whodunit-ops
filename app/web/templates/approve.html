@@ -51,7 +51,7 @@
       <form method="post" action="">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <input type="hidden" name="action" value="approve">
-        <button type="submit" class="primary">批准（{{ access_hours }} 小时）</button>
+        <button type="submit" class="primary">批准（{{ access_label }}）</button>
       </form>
       <form method="post" action="">
         <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -66,7 +66,7 @@
     {% elif status == "approved" %}
       {% if magic_link %}
       <div class="magic-link">
-        <label for="magic-link">备用访问链接（{{ access_hours }} 小时内有效）</label>
+        <label for="magic-link">备用访问链接（{{ access_label }}内有效）</label>
         <div class="copy-row">
           <input id="magic-link" class="mono" type="text" readonly value="{{ magic_link }}">
           <button type="button" class="secondary" data-copy-target="magic-link">复制</button>

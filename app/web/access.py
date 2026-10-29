@@ -42,12 +42,6 @@ class AccessError(RuntimeError):
     """访问申请相关的业务错误基类。"""
 
 
-class ActiveAccessExists(AccessError):
-    def __init__(self, request: "AccessRequest") -> None:
-        self.request = request
-        super().__init__("该邮箱已有有效访问")
-
-
 class RequestCooldown(AccessError):
     def __init__(
         self,
@@ -191,6 +185,10 @@ class CreatedRequest:
     request: AccessRequest
     approval_token: str
     browser_token: str
+    # 这个邮箱此前已被批准且仍在访问期内。不是错误：用户换了浏览器、清了
+    # Cookie 或误点了「退出」时，只能靠重新申请找回访问。带上它只为让页面
+    # 说清楚「你之前的授权还有效，这次是重新通知开发者」。
+    replaces_active: "AccessRequest | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,9 +396,11 @@ class AccessStore:
         approval_expires = now + timedelta(hours=approval_ttl_hours)
 
         with self._lock, self._conn:
-            active = self._find_active(email_hash_value, now)
-            if active is not None:
-                raise ActiveAccessExists(active)
+            # 已有有效访问**不**拦新申请：审批权始终在开发者手里，而用户
+            # 一旦换了浏览器、清了 Cookie 或误点「退出」，就再没有任何自助
+            # 找回访问的办法。旧实现会在这里直接报错，访问期只有 8 小时时
+            # 最多等 8 小时；默认改成 30 天后，等于把人锁在外面一个月。
+            superseded = self._find_active(email_hash_value, now)
 
             pending = self._find_pending(email_hash_value, now)
             if pending is not None:
@@ -462,6 +462,7 @@ class AccessStore:
                 request=created,
                 approval_token=approval_token,
                 browser_token=browser_token,
+                replaces_active=superseded,
             )
 
     def get_request(self, request_id: str) -> AccessRequest | None:
@@ -504,7 +505,7 @@ class AccessStore:
         self,
         approval_token: str | None,
         *,
-        access_hours: float = 8.0,
+        access_hours: float = 720.0,
     ) -> ApprovedRequest:
         if not isinstance(approval_token, str) or not approval_token:
             raise ApprovalTokenInvalid("审批链接无效")
